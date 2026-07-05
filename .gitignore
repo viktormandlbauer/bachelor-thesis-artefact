@@ -1,0 +1,23 @@
+# Maven
+target/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+# Quarkus
+.quarkus/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Local-only Claude settings
+.claude/settings.local.json
+
+# Demo output
+scripts/out/
