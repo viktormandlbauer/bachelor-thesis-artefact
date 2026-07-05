@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import java.time.Instant;
 import java.util.UUID;
 
-import org.eclipse.microprofile.reactive.messaging.Message;
 import org.junit.jupiter.api.Test;
 
 import at.thesis.poc.submission.domain.CaseRecord;
@@ -17,8 +16,9 @@ import jakarta.inject.Inject;
 
 /**
  * Consumer semantics (plan §3.4/§6.2): idempotent by eventId, loud failure for
- * malformed or unprocessable events. Invokes the consumer directly with synthetic
- * messages, so at-least-once redelivery is simulated by calling it twice.
+ * malformed or unprocessable events (a throw nacks the delivery so broker redelivery
+ * and DLQ routing apply). Invokes the consumer directly with synthetic payloads, so
+ * at-least-once redelivery is simulated by calling it twice.
  */
 @QuarkusTest
 class CaseOutboundConsumerTest {
@@ -51,8 +51,8 @@ class CaseOutboundConsumerTest {
         CaseRecord record = knownCase();
         JsonObject event = outboundEvent(UUID.randomUUID().toString(), record.caseId(), "reply");
 
-        consumer.onCaseOutbound(Message.of(event));
-        consumer.onCaseOutbound(Message.of(event));
+        consumer.onCaseOutbound(event);
+        consumer.onCaseOutbound(event);
 
         assertEquals(1, record.messageCount());
     }
@@ -60,7 +60,7 @@ class CaseOutboundConsumerTest {
     @Test
     void malformedEventFailsLoudly() {
         assertThrows(IllegalArgumentException.class, () ->
-                consumer.onCaseOutbound(Message.of(new JsonObject().put("eventId", "only-this"))));
+                consumer.onCaseOutbound(new JsonObject().put("eventId", "only-this")));
     }
 
     @Test
@@ -68,20 +68,20 @@ class CaseOutboundConsumerTest {
         CaseRecord record = knownCase();
         JsonObject event = outboundEvent(UUID.randomUUID().toString(), record.caseId(), "x")
                 .put("direction", "inbound");
-        assertThrows(IllegalArgumentException.class, () -> consumer.onCaseOutbound(Message.of(event)));
+        assertThrows(IllegalArgumentException.class, () -> consumer.onCaseOutbound(event));
     }
 
     @Test
     void unknownCaseFailsLoudly() {
         JsonObject event = outboundEvent(UUID.randomUUID().toString(), UUID.randomUUID().toString(), "x");
-        assertThrows(IllegalStateException.class, () -> consumer.onCaseOutbound(Message.of(event)));
+        assertThrows(IllegalStateException.class, () -> consumer.onCaseOutbound(event));
     }
 
     @Test
     void poisonMarkerFailsLoudly() {
         CaseRecord record = knownCase();
         JsonObject event = outboundEvent(UUID.randomUUID().toString(), record.caseId(), CaseEvents.POISON_MARKER);
-        assertThrows(IllegalStateException.class, () -> consumer.onCaseOutbound(Message.of(event)));
+        assertThrows(IllegalStateException.class, () -> consumer.onCaseOutbound(event));
         assertEquals(0, record.messageCount(), "poison event must not be applied");
     }
 }

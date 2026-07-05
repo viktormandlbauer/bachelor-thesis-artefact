@@ -36,8 +36,12 @@
     <acceptors>
       <!-- Core/all-protocol acceptor (console tooling, artemis CLI checks). -->
       <acceptor name="artemis">tcp://0.0.0.0:61616?tcpSendBufferSize=1048576;tcpReceiveBufferSize=1048576;amqpMinLargeMessageSize=102400;protocols=CORE,AMQP,STOMP,HORNETQ,MQTT,OPENWIRE;useEpoll=true;amqpCredits=1000;amqpLowCredits=300;amqpDuplicateDetection=true</acceptor>
-      <!-- AMQP 1.0 acceptor used by both Quarkus services (plan §2). -->
-      <acceptor name="amqp">tcp://0.0.0.0:5672?tcpSendBufferSize=1048576;tcpReceiveBufferSize=1048576;protocols=AMQP;useEpoll=true;amqpCredits=1000;amqpLowCredits=300;amqpMinLargeMessageSize=102400;amqpDuplicateDetection=true</acceptor>
+      <!-- AMQP 1.0 acceptor used by both Quarkus services (plan §2).
+           amqpTreatRejectAsUnmodifiedDeliveryFailed=true makes a rejected delivery go
+           through the normal redelivery machinery (delivery count + max-delivery-attempts
+           + DLQ) instead of being dead-lettered immediately, so the consumers'
+           failure-strategy=reject demonstrates bounded redelivery (plan §6.2). -->
+      <acceptor name="amqp">tcp://0.0.0.0:5672?tcpSendBufferSize=1048576;tcpReceiveBufferSize=1048576;protocols=AMQP;useEpoll=true;amqpCredits=1000;amqpLowCredits=300;amqpMinLargeMessageSize=102400;amqpDuplicateDetection=true;amqpTreatRejectAsUnmodifiedDeliveryFailed=true</acceptor>
     </acceptors>
 
     <security-settings>

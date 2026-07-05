@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import java.time.Instant;
 import java.util.UUID;
 
-import org.eclipse.microprofile.reactive.messaging.Message;
 import org.junit.jupiter.api.Test;
 
 import at.thesis.poc.management.domain.CaseStore;
@@ -17,8 +16,9 @@ import jakarta.inject.Inject;
 
 /**
  * Consumer semantics (plan §3.4/§6.2): the first inbound event creates the case,
- * processing is idempotent by eventId, and malformed events fail loudly. Invokes the
- * consumer directly with synthetic messages to simulate at-least-once redelivery.
+ * processing is idempotent by eventId, and malformed events fail loudly (a throw nacks
+ * the delivery so broker redelivery and DLQ routing apply). Invokes the consumer
+ * directly with synthetic payloads to simulate at-least-once redelivery.
  */
 @QuarkusTest
 class CaseInboundConsumerTest {
@@ -43,7 +43,7 @@ class CaseInboundConsumerTest {
     @Test
     void firstInboundEventCreatesOpenCase() {
         String caseId = UUID.randomUUID().toString();
-        consumer.onCaseInbound(Message.of(inboundEvent(UUID.randomUUID().toString(), caseId, "hello")));
+        consumer.onCaseInbound(inboundEvent(UUID.randomUUID().toString(), caseId, "hello"));
 
         assertNotNull(store.get(caseId));
         assertEquals("open", store.get(caseId).status());
@@ -55,8 +55,8 @@ class CaseInboundConsumerTest {
         String caseId = UUID.randomUUID().toString();
         JsonObject event = inboundEvent(UUID.randomUUID().toString(), caseId, "hello");
 
-        consumer.onCaseInbound(Message.of(event));
-        consumer.onCaseInbound(Message.of(event));
+        consumer.onCaseInbound(event);
+        consumer.onCaseInbound(event);
 
         assertEquals(1, store.get(caseId).messageCount());
     }
@@ -64,21 +64,21 @@ class CaseInboundConsumerTest {
     @Test
     void malformedEventFailsLoudly() {
         assertThrows(IllegalArgumentException.class, () ->
-                consumer.onCaseInbound(Message.of(new JsonObject().put("caseId", "only-this"))));
+                consumer.onCaseInbound(new JsonObject().put("caseId", "only-this")));
     }
 
     @Test
     void wrongDirectionFailsLoudly() {
         JsonObject event = inboundEvent(UUID.randomUUID().toString(), UUID.randomUUID().toString(), "x")
                 .put("direction", "outbound");
-        assertThrows(IllegalArgumentException.class, () -> consumer.onCaseInbound(Message.of(event)));
+        assertThrows(IllegalArgumentException.class, () -> consumer.onCaseInbound(event));
     }
 
     @Test
     void poisonMarkerFailsLoudly() {
         String caseId = UUID.randomUUID().toString();
         JsonObject event = inboundEvent(UUID.randomUUID().toString(), caseId, CaseEvents.POISON_MARKER);
-        assertThrows(IllegalStateException.class, () -> consumer.onCaseInbound(Message.of(event)));
+        assertThrows(IllegalStateException.class, () -> consumer.onCaseInbound(event));
         assertEquals(null, store.get(caseId), "poison event must not create the case");
     }
 }

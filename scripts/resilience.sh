@@ -36,10 +36,12 @@ wait_until() { # <description> <command producing json> <jq predicate> <seconds>
   fail "$desc (timeout after ${secs}s). Last response: ${out:-<empty>}"
 }
 
+# queue stat columns: |NAME|ADDRESS|CONSUMER_COUNT|MESSAGE_COUNT|... -> field 5
+# MSYS_NO_PATHCONV stops Git Bash from mangling the in-container path on Windows.
 dlq_count() {
-  docker exec poc-artemis /var/lib/artemis-instance/bin/artemis queue stat \
-    --user artemis --password artemis --queueName DLQ --clustered 2>/dev/null \
-    | awk -F'|' '$2 ~ /DLQ/ { gsub(/ /,"",$4); print $4 }' | head -1
+  MSYS_NO_PATHCONV=1 docker exec poc-artemis /var/lib/artemis-instance/bin/artemis queue stat \
+    --user artemis --password artemis --queueName DLQ 2>/dev/null \
+    | awk -F'|' '$2 ~ /DLQ/ { gsub(/ /,"",$5); print $5 }' | head -1
 }
 
 bold "Setup: create a case to work with"

@@ -1,9 +1,6 @@
 package at.thesis.poc.submission.messaging;
 
-import java.util.concurrent.CompletionStage;
-
 import org.eclipse.microprofile.reactive.messaging.Incoming;
-import org.eclipse.microprofile.reactive.messaging.Message;
 
 import at.thesis.poc.submission.domain.CaseRecord;
 import at.thesis.poc.submission.domain.CaseStore;
@@ -20,9 +17,14 @@ import jakarta.inject.Inject;
 /**
  * Consumes management replies from the durable queue case.outbound.submission.
  *
+ * The payload-style signature uses SmallRye's post-processing acknowledgement: a normal
+ * return acks the message only after successful processing, and a thrown exception nacks
+ * it so the channel's failure strategy (reject) hands it to Artemis' bounded-redelivery
+ * and DLQ machinery (plan §6.2). A Message<T> signature would make acknowledgement
+ * manual and a throw would leave the delivery unsettled forever.
+ *
  * Delivery is at-least-once: processing is idempotent by eventId (in-process only,
- * plan §3.4). Malformed or unprocessable events throw, which nacks the message so
- * Artemis applies bounded redelivery and finally routes it to the DLQ (plan §6.2).
+ * plan §3.4).
  */
 @ApplicationScoped
 public class CaseOutboundConsumer {
@@ -31,8 +33,8 @@ public class CaseOutboundConsumer {
     CaseStore store;
 
     @Incoming("case-outbound-in")
-    public CompletionStage<Void> onCaseOutbound(Message<JsonObject> message) {
-        CaseEvent event = CaseEvents.parse(message.getPayload());
+    public void onCaseOutbound(JsonObject payload) {
+        CaseEvent event = CaseEvents.parse(payload);
         if (!CaseEvents.DIRECTION_OUTBOUND.equals(event.direction())) {
             throw new IllegalArgumentException(
                     "Unexpected direction on case.outbound: " + event.direction());
@@ -48,7 +50,7 @@ public class CaseOutboundConsumer {
         if (store.isProcessed(event.eventId())) {
             Log.infof("Duplicate delivery of event %s for case %s ignored", event.eventId(), event.caseId());
             span.setAttribute("app.duplicate_delivery", true);
-            return message.ack();
+            return;
         }
 
         CaseRecord caseRecord = store.get(event.caseId());
@@ -64,6 +66,5 @@ public class CaseOutboundConsumer {
         caseRecord.append(record);
         store.markProcessed(event.eventId());
         Log.infof("Applied outbound event %s to case %s", event.eventId(), event.caseId());
-        return message.ack();
     }
 }

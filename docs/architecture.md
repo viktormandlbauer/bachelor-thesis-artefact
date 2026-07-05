@@ -71,9 +71,13 @@ docs/architecture.md  this file
   restart — durable idempotency is Phase 2). Dedup is checked before processing and
   marked after, so a crash mid-processing still allows redelivery.
 - **Fail loudly**: malformed events, wrong-direction events, unknown-case replies, and
-  the `__poison__` demo marker all throw. The channel's
-  `failure-strategy=modified-failed` nacks with `delivery-failed=true`, Artemis counts
-  the attempt, redelivers at most 3 times (1s delay), then routes to `DLQ`
+  the `__poison__` demo marker all throw. Consumers use the payload-style signature so
+  SmallRye's post-processing acknowledgement acks only after successful processing and
+  nacks on a throw (a `Message<T>` signature would make acking manual and a throw would
+  leave the delivery unsettled forever). The channel's `failure-strategy=reject` nacks
+  with the AMQP rejected outcome, and the broker acceptor sets
+  `amqpTreatRejectAsUnmodifiedDeliveryFailed=true`, so Artemis counts the attempt,
+  redelivers at most 3 times (1s delay), then routes to `DLQ`
   (`infra/artemis/broker.xml`, address-setting `case.#`).
 
 ## 3. Security model (Phase 1 scope)

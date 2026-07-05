@@ -1,9 +1,6 @@
 package at.thesis.poc.management.messaging;
 
-import java.util.concurrent.CompletionStage;
-
 import org.eclipse.microprofile.reactive.messaging.Incoming;
-import org.eclipse.microprofile.reactive.messaging.Message;
 
 import at.thesis.poc.management.domain.CaseRecord;
 import at.thesis.poc.management.domain.CaseStore;
@@ -21,9 +18,14 @@ import jakarta.inject.Inject;
  * Consumes submissions and follow-ups from the durable queue case.inbound.management.
  * The first inbound event of a case creates the management-side copy as "open" (plan §3.1).
  *
+ * The payload-style signature uses SmallRye's post-processing acknowledgement: a normal
+ * return acks the message only after successful processing, and a thrown exception nacks
+ * it so the channel's failure strategy (reject) hands it to Artemis' bounded-redelivery
+ * and DLQ machinery (plan §6.2). A Message<T> signature would make acknowledgement
+ * manual and a throw would leave the delivery unsettled forever.
+ *
  * Delivery is at-least-once: processing is idempotent by eventId (in-process only,
- * plan §3.4). Malformed or unprocessable events throw, which nacks the message so
- * Artemis applies bounded redelivery and finally routes it to the DLQ (plan §6.2).
+ * plan §3.4).
  */
 @ApplicationScoped
 public class CaseInboundConsumer {
@@ -32,8 +34,8 @@ public class CaseInboundConsumer {
     CaseStore store;
 
     @Incoming("case-inbound-in")
-    public CompletionStage<Void> onCaseInbound(Message<JsonObject> message) {
-        CaseEvent event = CaseEvents.parse(message.getPayload());
+    public void onCaseInbound(JsonObject payload) {
+        CaseEvent event = CaseEvents.parse(payload);
         if (!CaseEvents.DIRECTION_INBOUND.equals(event.direction())) {
             throw new IllegalArgumentException(
                     "Unexpected direction on case.inbound: " + event.direction());
@@ -49,7 +51,7 @@ public class CaseInboundConsumer {
         if (store.isProcessed(event.eventId())) {
             Log.infof("Duplicate delivery of event %s for case %s ignored", event.eventId(), event.caseId());
             span.setAttribute("app.duplicate_delivery", true);
-            return message.ack();
+            return;
         }
 
         CaseRecord caseRecord = store.getOrCreate(event.caseId(), event.createdAt());
@@ -59,6 +61,5 @@ public class CaseInboundConsumer {
         caseRecord.append(record);
         store.markProcessed(event.eventId());
         Log.infof("Applied inbound event %s to case %s", event.eventId(), event.caseId());
-        return message.ack();
     }
 }
