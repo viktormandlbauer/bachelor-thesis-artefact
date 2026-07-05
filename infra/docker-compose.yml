@@ -13,7 +13,9 @@ name: anonymous-case-poc
 
 services:
   artemis:
-    image: apache/activemq-artemis:2.53.0
+    # Newest tag published on Docker Hub; the Artemis Docker images lag the
+    # source releases (no 2.5x image exists yet as of July 2026).
+    image: apache/activemq-artemis:2.44.0
     container_name: poc-artemis
     environment:
       ARTEMIS_USER: artemis
