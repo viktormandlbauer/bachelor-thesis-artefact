@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  Artemis topology for the anonymous-case POC (plan §8.3).
+
+  - case.inbound  : submission -> management, durable anycast queue case.inbound.management
+  - case.outbound : management -> submission, durable anycast queue case.outbound.submission
+  - DLQ           : dead-letter destination for repeatedly failing case.# messages
+
+  Bounded redelivery: a message that keeps failing consumer processing is redelivered
+  at most 3 times (1s delay) and then routed to DLQ, so a poison message can never
+  block the queues and remains available for inspection (plan §6.2).
+
+  This file is copied over the generated instance configuration through the official
+  image's /var/lib/artemis-instance/etc-override mechanism.
+-->
+<configuration xmlns="urn:activemq"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:schemaLocation="urn:activemq /schema/artemis-configuration.xsd">
+
+  <core xmlns="urn:activemq:core"
+        xsi:schemaLocation="urn:activemq:core">
+
+    <name>anonymous-case-broker</name>
+
+    <persistence-enabled>true</persistence-enabled>
+    <journal-type>NIO</journal-type>
+    <paging-directory>data/paging</paging-directory>
+    <bindings-directory>data/bindings</bindings-directory>
+    <journal-directory>data/journal</journal-directory>
+    <large-messages-directory>data/large-messages</large-messages-directory>
+    <journal-pool-files>10</journal-pool-files>
+
+    <max-disk-usage>90</max-disk-usage>
+    <critical-analyzer>true</critical-analyzer>
+
+    <acceptors>
+      <!-- Core/all-protocol acceptor (console tooling, artemis CLI checks). -->
+      <acceptor name="artemis">tcp://0.0.0.0:61616?tcpSendBufferSize=1048576;tcpReceiveBufferSize=1048576;amqpMinLargeMessageSize=102400;protocols=CORE,AMQP,STOMP,HORNETQ,MQTT,OPENWIRE;useEpoll=true;amqpCredits=1000;amqpLowCredits=300;amqpDuplicateDetection=true</acceptor>
+      <!-- AMQP 1.0 acceptor used by both Quarkus services (plan §2). -->
+      <acceptor name="amqp">tcp://0.0.0.0:5672?tcpSendBufferSize=1048576;tcpReceiveBufferSize=1048576;protocols=AMQP;useEpoll=true;amqpCredits=1000;amqpLowCredits=300;amqpMinLargeMessageSize=102400;amqpDuplicateDetection=true</acceptor>
+    </acceptors>
+
+    <security-settings>
+      <security-setting match="#">
+        <permission type="createNonDurableQueue" roles="amq"/>
+        <permission type="deleteNonDurableQueue" roles="amq"/>
+        <permission type="createDurableQueue" roles="amq"/>
+        <permission type="deleteDurableQueue" roles="amq"/>
+        <permission type="createAddress" roles="amq"/>
+        <permission type="deleteAddress" roles="amq"/>
+        <permission type="consume" roles="amq"/>
+        <permission type="browse" roles="amq"/>
+        <permission type="send" roles="amq"/>
+        <permission type="manage" roles="amq"/>
+      </security-setting>
+    </security-settings>
+
+    <address-settings>
+      <address-setting match="activemq.management#">
+        <dead-letter-address>DLQ</dead-letter-address>
+        <expiry-address>ExpiryQueue</expiry-address>
+        <redelivery-delay>0</redelivery-delay>
+        <max-size-bytes>-1</max-size-bytes>
+        <message-counter-history-day-limit>10</message-counter-history-day-limit>
+        <address-full-policy>PAGE</address-full-policy>
+        <auto-create-queues>true</auto-create-queues>
+        <auto-create-addresses>true</auto-create-addresses>
+      </address-setting>
+
+      <!-- Bounded redelivery + DLQ for both case directions (plan §8.3). -->
+      <address-setting match="case.#">
+        <dead-letter-address>DLQ</dead-letter-address>
+        <expiry-address>ExpiryQueue</expiry-address>
+        <max-delivery-attempts>3</max-delivery-attempts>
+        <redelivery-delay>1000</redelivery-delay>
+        <max-size-bytes>-1</max-size-bytes>
+        <address-full-policy>PAGE</address-full-policy>
+        <auto-create-queues>false</auto-create-queues>
+        <auto-create-addresses>false</auto-create-addresses>
+      </address-setting>
+
+      <address-setting match="#">
+        <dead-letter-address>DLQ</dead-letter-address>
+        <expiry-address>ExpiryQueue</expiry-address>
+        <redelivery-delay>0</redelivery-delay>
+        <max-size-bytes>-1</max-size-bytes>
+        <message-counter-history-day-limit>10</message-counter-history-day-limit>
+        <address-full-policy>PAGE</address-full-policy>
+        <auto-create-queues>true</auto-create-queues>
+        <auto-create-addresses>true</auto-create-addresses>
+      </address-setting>
+    </address-settings>
+
+    <addresses>
+      <address name="DLQ">
+        <anycast>
+          <queue name="DLQ"/>
+        </anycast>
+      </address>
+      <address name="ExpiryQueue">
+        <anycast>
+          <queue name="ExpiryQueue"/>
+        </anycast>
+      </address>
+      <!-- Durable anycast queues; queue definitions are durable by default. -->
+      <address name="case.inbound">
+        <anycast>
+          <queue name="case.inbound.management"/>
+        </anycast>
+      </address>
+      <address name="case.outbound">
+        <anycast>
+          <queue name="case.outbound.submission"/>
+        </anycast>
+      </address>
+    </addresses>
+
+  </core>
+</configuration>

@@ -1,0 +1,78 @@
+# Anonymous-case POC: Artemis broker + the two Quarkus services (plan §8.2).
+#
+# The observability stack lives in infra/signoz/docker-compose.yaml and must be started
+# first, because the app services join its "signoz-net" network to reach the OTLP
+# collector:
+#
+#   docker compose -f infra/signoz/docker-compose.yaml up -d
+#   docker compose -f infra/docker-compose.yml up -d --build
+#
+# Faster inner loop: start only artemis here and run the services on the host with
+# `mvn quarkus:dev` (they default to localhost:5672 / localhost:4317).
+name: anonymous-case-poc
+
+services:
+  artemis:
+    image: apache/activemq-artemis:2.53.0
+    container_name: poc-artemis
+    environment:
+      ARTEMIS_USER: artemis
+      ARTEMIS_PASSWORD: artemis
+    ports:
+      - "5672:5672"   # AMQP 1.0 (the only integration point between the services)
+      - "8161:8161"   # web console (local inspection, DLQ browsing)
+      - "61616:61616" # core/all-protocol (artemis CLI checks)
+    volumes:
+      # Copied over the generated instance config on first start (etc-override
+      # mechanism of the official image). Defines the case.* addresses, durable
+      # queues, DLQ, and bounded redelivery (plan §8.3).
+      - ./artemis/broker.xml:/var/lib/artemis-instance/etc-override/broker.xml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/5672'"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  submission-service:
+    build: ../submission-service
+    container_name: poc-submission-service
+    depends_on:
+      artemis:
+        condition: service_healthy
+    environment:
+      AMQP_HOST: artemis
+      AMQP_PORT: "5672"
+      AMQP_USERNAME: artemis
+      AMQP_PASSWORD: artemis
+      QUARKUS_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://signoz-otel-collector:4317
+      QUARKUS_OTEL_RESOURCE_ATTRIBUTES: service.namespace=anonymous-case-poc,deployment.environment=local
+    ports:
+      - "8080:8080"
+    networks:
+      - default
+      - signoz-net
+
+  management-service:
+    build: ../management-service
+    container_name: poc-management-service
+    depends_on:
+      artemis:
+        condition: service_healthy
+    environment:
+      AMQP_HOST: artemis
+      AMQP_PORT: "5672"
+      AMQP_USERNAME: artemis
+      AMQP_PASSWORD: artemis
+      QUARKUS_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://signoz-otel-collector:4317
+      QUARKUS_OTEL_RESOURCE_ATTRIBUTES: service.namespace=anonymous-case-poc,deployment.environment=local
+    ports:
+      - "8081:8081"
+    networks:
+      - default
+      - signoz-net
+
+networks:
+  default:
+  signoz-net:
+    external: true
