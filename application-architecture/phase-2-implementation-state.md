@@ -14,8 +14,25 @@
 | 4. management-service: persistence + inbox + outbox | done | mirror of submission minus token hash; consumer creates case projection |
 | 5. management-service: OIDC + roles, author from JWT | done | `@RolesAllowed("case-manager")`, author = preferred_username → principal name fallback |
 | 6. Compose wiring for services (env, readiness) | done | DB_URL/DB_USERNAME/DB_PASSWORD + QUARKUS_OIDC_* env; KC_HOSTNAME pins issuer to http://localhost:8180 |
-| 7. Tests reworked for persistent semantics | in progress | old tests reference deleted classes; rewrite next |
-| 8. End-to-end verification (§10.1–10.6) | not started | build images, run compose, run §10 checks |
+| 7. Tests reworked for persistent semantics | done | 16 + 14 green vs Dev Services PostgreSQL + Artemis; OIDC via @TestSecurity/@OidcSecurity |
+| 8. End-to-end verification (§10.1–10.6) | done | verified 2026-07-06 against compose, see below |
+
+## E2E verification results (compose, 2026-07-06)
+
+- §10.1 statelessness: case + 3-message thread survived `docker restart` of both services.
+- §10.2 identity: no/garbage token → 401, intern (no role) → 403, staff → 200; reply
+  author recorded as `staff` (preferred_username from the Keycloak JWT).
+- §10.3 outbox: with Artemis stopped, append returned 202 and the row sat
+  `PENDING|attempts=1|TimeoutException`; after `docker start poc-artemis` it flipped to
+  `PUBLISHED` (3 attempts) and the management side received it exactly once.
+- §10.4 inbox: duplicate delivery covered by consumer tests; management `inbox_events`
+  holds exactly one row per inbound event.
+- §10.5 probes: `/q/health/ready` on both services includes the AMQP channels and the
+  datasource checks.
+- §10.6 observability: traceparent persisted per outbox row (asserted in
+  OutboxRelayTest); visual SigNoz check (one trace across HTTP → outbox → AMQP →
+  consumer → DB) is the remaining **manual** step — open the SigNoz UI while running
+  `scripts/demo.sh`-style traffic.
 
 ## Decisions already made (do not re-litigate)
 
