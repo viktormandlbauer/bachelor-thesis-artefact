@@ -56,6 +56,16 @@
 - Keep Phase 1 rules: no direct service-to-service calls, FQQN queue bindings, DLQ +
   bounded redelivery, 404-on-bad-token, `TokenService` SHA-256 hashing.
 
+## k3s promotion (2026-07-07)
+
+The infrastructure track is done: the Helm chart (`deploy/helm/anonymous-case-poc`)
+now deploys the full Phase-2 stack (services 2.0.0 + Artemis + PostgreSQL +
+Keycloak with declarative realm import) on the CIS-hardened k3s cluster.
+The compose env contract (DB_URL/DB_USERNAME/DB_PASSWORD, QUARKUS_OIDC_*) is
+wired via ConfigMap-free env + pre-created Secrets (`scripts/secrets-bootstrap.sh`,
+REQ-G-005). Requirements-catalogue validation is automated in
+`scripts/validate-requirements.sh` (see `docs/requirements-validation.md`).
+
 ## Known follow-ups / risks
 
 - Existing tests assume in-memory store and commit-after-publish semantics

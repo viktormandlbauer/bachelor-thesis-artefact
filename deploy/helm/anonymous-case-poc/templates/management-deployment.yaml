@@ -33,13 +33,34 @@ spec:
             - name: AMQP_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "case-poc.fullname" . }}-artemis-auth
+                  name: {{ .Values.secrets.artemis }}
                   key: ARTEMIS_USER
             - name: AMQP_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "case-poc.fullname" . }}-artemis-auth
+                  name: {{ .Values.secrets.artemis }}
                   key: ARTEMIS_PASSWORD
+            # Phase-2 persistence (env contract from infra/docker-compose.yml)
+            - name: DB_URL
+              value: jdbc:postgresql://{{ include "case-poc.fullname" . }}-postgres:5432/case_poc
+            - name: DB_USERNAME
+              value: management_service
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.db }}
+                  key: MANAGEMENT_DB_PASSWORD
+            # Phase-2 OIDC: discovery/JWKS over the in-cluster backchannel;
+            # issuer check pinned to the public hostname Keycloak stamps into
+            # every token (KC_HOSTNAME on the keycloak deployment). The
+            # connection delay tolerates Keycloak still importing the realm
+            # when this pod starts.
+            - name: QUARKUS_OIDC_AUTH_SERVER_URL
+              value: http://{{ include "case-poc.fullname" . }}-keycloak:8080/realms/case-poc
+            - name: QUARKUS_OIDC_TOKEN_ISSUER
+              value: http://{{ .Values.ingress.keycloakHost }}/realms/case-poc
+            - name: QUARKUS_OIDC_CONNECTION_DELAY
+              value: 120S
             {{- if .Values.otel.enabled }}
             - name: QUARKUS_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
               value: {{ .Values.otel.endpoint | quote }}

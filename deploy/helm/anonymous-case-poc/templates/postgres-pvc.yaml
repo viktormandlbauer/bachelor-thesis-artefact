@@ -1,0 +1,19 @@
+{{- if .Values.postgres.persistence.enabled }}
+# Database files of the single PostgreSQL instance (schemas submission +
+# management). Case data survives pod restarts — the Phase-2 statelessness
+# property depends on this volume, not on the service pods.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "case-poc.fullname" . }}-postgres-data
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.postgres.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.postgres.persistence.size }}
+{{- end }}

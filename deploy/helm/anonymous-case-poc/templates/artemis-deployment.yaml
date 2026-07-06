@@ -32,9 +32,11 @@ spec:
           imagePullPolicy: {{ .Values.images.pullPolicy }}
           securityContext:
             {{- include "case-poc.containerSecurityContext" . | nindent 12 }}
+          # ARTEMIS_USER / ARTEMIS_PASSWORD from the pre-created secret
+          # (scripts/secrets-bootstrap.sh) — no credential in git.
           envFrom:
             - secretRef:
-                name: {{ include "case-poc.fullname" . }}-artemis-auth
+                name: {{ .Values.secrets.artemis }}
           ports:
             - name: amqp
               containerPort: 5672

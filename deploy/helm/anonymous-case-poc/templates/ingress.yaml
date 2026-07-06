@@ -1,7 +1,9 @@
 {{- if .Values.ingress.enabled }}
-# Host-routed HTTP through the k3s-bundled Traefik. Phase-1 scope: no TLS,
-# and the management API is deliberately unauthenticated (Keycloak comes in
-# Phase 2) - acceptable only because the cluster is local-only.
+# Host-routed HTTP through the k3s-bundled Traefik. POC scope: no TLS —
+# acceptable only because the cluster is local-only. The management API is
+# OIDC-protected (Phase 2); Keycloak is routed through the same ingress so
+# that tokens fetched from outside carry the issuer the in-cluster
+# management-service verifies (see keycloak-deployment.yaml, KC_HOSTNAME).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -29,6 +31,16 @@ spec:
             backend:
               service:
                 name: {{ include "case-poc.fullname" . }}-management
+                port:
+                  name: http
+    - host: {{ .Values.ingress.keycloakHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "case-poc.fullname" . }}-keycloak
                 port:
                   name: http
 {{- end }}

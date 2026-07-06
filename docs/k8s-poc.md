@@ -1,13 +1,19 @@
 # Kubernetes POC — CIS-hardened k3s + Argo CD GitOps
 
-This stage moves the Phase-1 application (submission-service, management-service,
-ActiveMQ Artemis) onto a single-node [k3s](https://k3s.io) cluster that
+This stage runs the Phase-2 application (submission-service, management-service,
+ActiveMQ Artemis, PostgreSQL, Keycloak) on a single-node [k3s](https://k3s.io)
+cluster that
 
 * **passes [kube-bench](https://github.com/aquasecurity/kube-bench) with 0 failed
   checks** (profile `k3s-cis-1.9`, run with the full workload deployed), and
 * is **versioned with Argo CD**: the cluster state is defined by this git
   repository; the Helm chart and the Argo CD `Application` manifests are the
-  deployment mechanism.
+  deployment mechanism, and
+* is **validated against the thesis requirements catalogue**: every
+  automatable acceptance criterion (functional, operational, governance) is
+  executed by `scripts/validate-requirements.sh` — method in
+  [requirements-validation.md](requirements-validation.md), evidence reports
+  under `docs/reports/`.
 
 Day-2 interaction with the running environment (kubectl access, app API,
 deploying changes, consoles, troubleshooting) is documented in
@@ -22,7 +28,9 @@ Host = Ansible controller (macOS or Windows 11)
         ├── kube-system       -> traefik ingress, coredns, ... (token-automount hardened)
         ├── argocd            -> Argo CD v3.4.4, namespace-scoped, non-wildcard RBAC
         └── case-poc          -> Helm release "case-poc" of deploy/helm/anonymous-case-poc
-                                 (artemis + submission + management, restricted PSS)
+                                 (artemis + postgres + keycloak + submission + management,
+                                  restricted PSS, deny-by-default NetworkPolicies both
+                                  directions, credentials from bootstrap-generated Secrets)
 ```
 
 | Pinned component | Version |
@@ -32,7 +40,10 @@ Host = Ansible controller (macOS or Windows 11)
 | Argo CD | `v3.4.4` (namespace-scoped install) |
 | kube-bench | `0.15.6`, benchmark `k3s-cis-1.9` |
 | Artemis image | `apache/activemq-artemis:2.44.0` |
-| Service images | `case-poc/{submission,management}-service:1.0.0` (local, imported into containerd) |
+| PostgreSQL image | `postgres:17-alpine` |
+| Keycloak image | `quay.io/keycloak/keycloak:26.3` (dev mode + declarative realm import) |
+| Helm (on the node) | `v3.19.0` (installed by the playbook; used for REQ-F/O validation) |
+| Service images | `case-poc/{submission,management}-service:2.0.0` (local, imported into containerd) |
 
 ## Prerequisites
 
@@ -69,14 +80,21 @@ multipass exec case-poc -- sudo bash /repo/scripts/kube-bench-run.sh
 bash scripts/images-import.sh
 
 # 4. Bootstrap the GitOps control plane (Argo CD + AppProject + root app).
+#    Also generates the runtime credentials as in-cluster Secrets
+#    (scripts/secrets-bootstrap.sh — nothing secret is stored in git).
 #    Everything below deploy/argocd/apps/ is afterwards synced from GitHub.
 multipass exec case-poc -- sudo bash /repo/scripts/argocd-install.sh
 
-# 5. End-to-end proof through the ingress (resolves the VM IP itself)
+# 5. End-to-end proof through the ingress (OIDC login, 401/403 checks,
+#    full two-way case thread; resolves the VM IP itself)
 bash scripts/k8s-demo.sh
+
+# 6. Execute the requirements-catalogue acceptance criteria and write the
+#    evidence report to docs/reports/requirements-validation-<date>.md
+multipass exec case-poc -- sudo bash /repo/scripts/validate-requirements.sh
 ```
 
-The Argo CD `Application`s track branch `k8s-poc`
+The Argo CD `Application`s track branch `phase2`
 (`deploy/argocd/root-app.yaml`, `deploy/argocd/apps/*.yaml`); switch
 `targetRevision` to `HEAD` once the branch is merged. Note the bootstrap is
 two-phase by design: `deploy/argocd/install` (applied once by hand) creates the
@@ -102,7 +120,8 @@ deploy/
 │   ├── root-app.yaml     # app-of-apps, applied once by argocd-install.sh
 │   └── apps/             # every Application here is auto-synced by root
 │       └── anonymous-case-poc.yaml
-└── helm/anonymous-case-poc/   # the Phase-1 app chart (values pin the images)
+└── helm/anonymous-case-poc/   # the Phase-2 app chart (values pin the images;
+                               # secrets only referenced by name, never templated)
 ```
 
 Access:
@@ -110,10 +129,13 @@ Access:
 * API from the host: `kubectl --kubeconfig .vm-kubeconfig.yaml` — the
   kubeconfig is exported (server rewritten to the VM IP) by `scripts/vm-up.sh`;
   the VM IP is in the k3s serving-cert SANs, so TLS verification holds.
-* App: `http://submission.localtest.me` and `http://management.localtest.me`
-  against the **VM IP** (Traefik on port 80; `localtest.me` resolves to
-  `127.0.0.1`, so pin the IP with `curl --resolve`, as `scripts/k8s-demo.sh`
-  does — that also sidesteps router DNS-rebind protection).
+* App: `http://submission.localtest.me`, `http://management.localtest.me` and
+  `http://keycloak.localtest.me` against the **VM IP** (Traefik on port 80;
+  `localtest.me` resolves to `127.0.0.1`, so pin the IP with `curl --resolve`,
+  as `scripts/k8s-demo.sh` does — that also sidesteps router DNS-rebind
+  protection). The management API requires a Keycloak bearer token
+  (realm `case-poc`, demo user `staff`); see
+  [k8s-poc-usage.md](k8s-poc-usage.md) for the token snippet.
 * Argo CD UI: `kubectl --kubeconfig .vm-kubeconfig.yaml -n argocd port-forward svc/argocd-server 8443:443`,
   login `admin` / `kubectl --kubeconfig .vm-kubeconfig.yaml -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d`.
 * Artemis console (DLQ inspection): `kubectl --kubeconfig .vm-kubeconfig.yaml -n case-poc port-forward svc/case-poc-anonymous-case-poc-artemis 8161:8161`
@@ -173,15 +195,22 @@ Details worth knowing before re-running:
 
 ## Scope notes / known limitations (POC)
 
-* Broker credentials are POC values in `values.yaml`; the management API is
-  deliberately unauthenticated (Phase-1 scope — Keycloak arrives in Phase 2)
-  and must not be exposed beyond the local machine.
+* All infrastructure credentials (broker, PostgreSQL superuser + per-service
+  logins, Keycloak admin) are generated at bootstrap
+  (`scripts/secrets-bootstrap.sh`) and exist only as in-cluster Secrets
+  (REQ-G-005). The Keycloak **demo users** (`staff`/`intern`) are checked-in
+  realm fixtures — synthetic test identities the 401/403 demo depends on.
+* The management API is OIDC-protected (Phase 2): realm `case-poc`, client
+  `management-api`, role `case-manager`. Keycloak runs in dev mode with an
+  ephemeral H2 store; realm state is declarative (re-imported on every start).
+  Production mode (external DB, TLS, strict hostname) is rollout-phase work.
 * No TLS on the ingress; Argo CD UI only via port-forward.
 * OpenTelemetry export is disabled by default (`otel.enabled=false`) because
   the cluster runs no collector; point `otel.endpoint` at an OTLP gRPC
-  collector to restore Phase-1 tracing.
-* Images are imported into containerd by hand (`scripts/images-import.sh`);
-  a registry + CI pipeline is future work (see application-architecture/future.md).
+  collector to restore tracing (and add a matching egress NetworkPolicy).
+* Images are imported into containerd (`scripts/images-import.sh`); a
+  registry + CI pipeline is future work (see application-architecture/future.md
+  and the REQ-F-010 justification in docs/requirements-validation.md).
 
 ## Teardown
 

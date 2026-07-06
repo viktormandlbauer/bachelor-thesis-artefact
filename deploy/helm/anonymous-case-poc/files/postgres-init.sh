@@ -1,0 +1,23 @@
+#!/bin/sh
+# Phase 2 data ownership (plan §6): one PostgreSQL instance, strict per-service
+# ownership. Each service gets its own schema and its own login; neither can
+# touch the other's schema. Runs once on first pod start against
+# POSTGRES_DB=case_poc; the passwords come from the case-poc-db-auth Secret
+# (hex-encoded random values, so single-quoting below is safe).
+set -e
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<EOSQL
+CREATE USER submission_service WITH PASSWORD '$SUBMISSION_DB_PASSWORD';
+CREATE USER management_service WITH PASSWORD '$MANAGEMENT_DB_PASSWORD';
+
+-- AUTHORIZATION makes the service user the schema owner: full DDL/DML inside
+-- its own schema (Flyway runs as this user), and no grants anywhere else.
+CREATE SCHEMA submission AUTHORIZATION submission_service;
+CREATE SCHEMA management AUTHORIZATION management_service;
+
+-- No shared playground: the public schema is not writable, and connecting to
+-- the database is an explicit grant instead of the PostgreSQL default.
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+REVOKE CONNECT ON DATABASE case_poc FROM PUBLIC;
+GRANT CONNECT ON DATABASE case_poc TO submission_service, management_service;
+EOSQL

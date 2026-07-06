@@ -10,7 +10,7 @@ you (host)
 ├── multipass            -> VM lifecycle (start/stop/shell)
 ├── kubectl --kubeconfig .vm-kubeconfig.yaml   -> cluster API
 ├── curl --resolve ...   -> app API through the Traefik ingress (port 80)
-├── git push (k8s-poc)   -> deployment (Argo CD pulls from GitHub)
+├── git push (phase2)    -> deployment (Argo CD pulls from GitHub)
 └── port-forward         -> Argo CD UI (8443), Artemis console (8161)
 ```
 
@@ -62,7 +62,17 @@ Bash):
 
 ```bash
 VM_IP=$(multipass exec case-poc -- hostname -I | awk '{print $1}')
-alias capp='curl --resolve submission.localtest.me:80:$VM_IP --resolve management.localtest.me:80:$VM_IP'
+alias capp='curl --resolve submission.localtest.me:80:$VM_IP --resolve management.localtest.me:80:$VM_IP --resolve keycloak.localtest.me:80:$VM_IP'
+```
+
+The management API is OIDC-protected (Phase 2). Fetch a bearer token for the
+demo user `staff` (realm fixture with the `case-manager` role) from the
+in-cluster Keycloak:
+
+```bash
+STAFF_TOKEN=$(capp -s -X POST http://keycloak.localtest.me/realms/case-poc/protocol/openid-connect/token \
+  -d grant_type=password -d client_id=management-api \
+  -d username=staff -d password=staff-password | jq -r .access_token)
 ```
 
 The full happy path in one command (also the smoke test after any change):
@@ -78,9 +88,9 @@ Endpoints (reporter side = submission, case-handler side = management):
 | Reporter | `POST http://submission.localtest.me/api/cases` `{"message": "..."}` | — (returns `caseId` + one-time `accessToken`) |
 | Reporter | `GET  http://submission.localtest.me/api/cases/{caseId}` | header `X-Case-Token: <accessToken>` |
 | Reporter | `POST http://submission.localtest.me/api/cases/{caseId}/messages` `{"message": "..."}` | header `X-Case-Token: <accessToken>` |
-| Management | `GET  http://management.localtest.me/api/cases?status=open` | — (POC: unauthenticated, Phase 2 adds Keycloak) |
-| Management | `GET  http://management.localtest.me/api/cases/{caseId}` | — |
-| Management | `POST http://management.localtest.me/api/cases/{caseId}/reply` `{"message": "..."}` | — |
+| Management | `GET  http://management.localtest.me/api/cases?status=open` | header `Authorization: Bearer $STAFF_TOKEN` (role `case-manager`; no token → 401, no role → 403) |
+| Management | `GET  http://management.localtest.me/api/cases/{caseId}` | header `Authorization: Bearer $STAFF_TOKEN` |
+| Management | `POST http://management.localtest.me/api/cases/{caseId}/reply` `{"message": "..."}` | header `Authorization: Bearer $STAFF_TOKEN` |
 
 Example session:
 
@@ -90,8 +100,10 @@ resp=$(capp -s -X POST http://submission.localtest.me/api/cases \
 case_id=$(echo "$resp" | jq -r .caseId)
 token=$(echo "$resp" | jq -r .accessToken)        # shown only once
 
-capp -s "http://management.localtest.me/api/cases?status=open" | jq .
-capp -s -X POST "http://management.localtest.me/api/cases/$case_id/reply" \
+capp -s -H "Authorization: Bearer $STAFF_TOKEN" \
+  "http://management.localtest.me/api/cases?status=open" | jq .
+capp -s -X POST -H "Authorization: Bearer $STAFF_TOKEN" \
+  "http://management.localtest.me/api/cases/$case_id/reply" \
   -H 'Content-Type: application/json' -d '{"message":"we are on it"}' | jq .
 capp -s "http://submission.localtest.me/api/cases/$case_id" \
   -H "X-Case-Token: $token" | jq .
@@ -103,7 +115,7 @@ to appear on the other side (the demo script polls for exactly this reason).
 ## Deploying changes (GitOps)
 
 Argo CD auto-syncs everything under `deploy/argocd/apps/` and the Helm chart
-from **GitHub branch `k8s-poc`** — the working tree and even a local commit
+from **GitHub branch `phase2`** — the working tree and even a local commit
 are *not* enough; **pushing is the deployment action**:
 
 ```bash
@@ -121,9 +133,9 @@ containerd (no registry), so the tag must move for the kubelet to see a
 change (`imagePullPolicy: IfNotPresent`):
 
 ```bash
-bash scripts/images-import.sh 1.0.1     # build both services, import into k3s
-vim deploy/helm/anonymous-case-poc/values.yaml   # bump images.*.tag to 1.0.1
-git commit -am "bump service images to 1.0.1" && git push
+bash scripts/images-import.sh 2.0.1     # build both services, import into k3s
+vim deploy/helm/anonymous-case-poc/values.yaml   # bump images.*.tag to 2.0.1
+git commit -am "bump service images to 2.0.1" && git push
 ```
 
 To force an immediate refresh instead of waiting for the poll:
@@ -153,7 +165,9 @@ the only path.
 
 ```bash
 kubectl -n case-poc port-forward svc/case-poc-anonymous-case-poc-artemis 8161:8161
-# http://localhost:8161/console   login artemis / artemis (POC credentials)
+# http://localhost:8161/console — login artemis / <generated password>:
+kubectl -n case-poc get secret case-poc-artemis-auth \
+  -o jsonpath='{.data.ARTEMIS_PASSWORD}' | base64 -d; echo
 ```
 
 Look under *Queues* for depths and the dead-letter queue; the port-forward
@@ -178,7 +192,8 @@ for **every** pod in the cluster, see k8s-poc.md.
 | --- | --- |
 | `kubectl` connection refused / TLS error | VM IP changed after restart — re-run `bash scripts/vm-up.sh` |
 | App pod `ErrImagePull`/`ImagePullBackOff` | image tag not in containerd (the registry pull it falls back to cannot succeed) — `bash scripts/images-import.sh <tag>` |
-| App `OutOfSync` but nothing happens | change not **pushed** to `origin/k8s-poc`, or force a refresh (annotation above) |
+| App `OutOfSync` but nothing happens | change not **pushed** to `origin/phase2`, or force a refresh (annotation above) |
+| Management API answers 401/403 | token missing/expired (they are short-lived — re-fetch `$STAFF_TOKEN`) or user lacks the `case-manager` role |
 | Demo fails on step 1 | ingress not up or wrong IP — `kubectl -n kube-system get pods`, check `traefik`; re-run demo (it re-resolves the IP) |
 | Pod rejected on create | restricted PSS violation — `kubectl -n case-poc get events` shows the exact field |
 | Reply never arrives | broker issue — check Artemis pod logs and the DLQ via the console |

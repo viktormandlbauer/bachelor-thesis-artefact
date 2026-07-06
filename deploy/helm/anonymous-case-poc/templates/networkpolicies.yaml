@@ -1,20 +1,52 @@
 {{- if .Values.networkPolicies.enabled }}
 # Namespace traffic rules (enforced by the k3s-embedded network policy
-# controller):
-#   - default: no ingress to any pod
-#   - HTTP into the two services only from kube-system (Traefik ingress)
-#   - AMQP/console/core into Artemis only from pods of this release
-# kubectl port-forward bypasses NetworkPolicy by design (kubelet-proxied),
-# so the Artemis console stays reachable for local DLQ inspection.
+# controller), deny-by-default in BOTH directions (REQ-G-003):
+#
+#   ingress                                          egress
+#   -------                                          ------
+#   traefik (kube-system) -> services :8080/:8081    services   -> artemis :5672
+#   traefik (kube-system) -> keycloak :8080          services   -> postgres :5432
+#   management            -> keycloak :8080          management -> keycloak :8080
+#   release pods          -> artemis :5672/...       all pods   -> kube-dns :53
+#   services              -> postgres :5432
+#
+# kubectl port-forward and exec bypass NetworkPolicy by design (they are
+# kubelet/API-server proxied), so the Artemis console stays reachable for
+# local DLQ inspection. Kubelet probes are host-originated and equally
+# unaffected. Enabling otel requires an extra egress rule to the collector.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "case-poc.fullname" . }}-default-deny-ingress
+  name: {{ include "case-poc.fullname" . }}-default-deny
   labels:
     {{- include "case-poc.labels" . | nindent 4 }}
 spec:
   podSelector: {}
-  policyTypes: ["Ingress"]
+  policyTypes: ["Ingress", "Egress"]
+---
+# DNS for every pod in the namespace (service discovery, REQ-F-008).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "case-poc.fullname" . }}-allow-dns
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -58,4 +90,105 @@ spec:
         - port: 5672
         - port: 8161
         - port: 61616
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "case-poc.fullname" . }}-allow-postgres-from-services
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: [submission-service, management-service]
+      ports:
+        - port: 5432
+---
+# Keycloak: token/console traffic through Traefik, plus the OIDC backchannel
+# (discovery + JWKS) from management-service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "case-poc.fullname" . }}-allow-keycloak
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: management-service
+      ports:
+        - port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "case-poc.fullname" . }}-submission-egress
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: submission-service
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: artemis
+      ports:
+        - port: 5672
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "case-poc.fullname" . }}-management-egress
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: management-service
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: artemis
+      ports:
+        - port: 5672
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - port: 8080
 {{- end }}

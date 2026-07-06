@@ -1,6 +1,8 @@
-# The Phase-1 microservice application, rendered from the in-repo Helm chart.
-# Image tags/values are versioned in the chart's values.yaml; changing them in
-# git is the deployment mechanism.
+# The Phase-2 microservice application (services + Artemis + PostgreSQL +
+# Keycloak), rendered from the in-repo Helm chart. Image tags/values are
+# versioned in the chart's values.yaml; changing them in git is the
+# deployment mechanism. Runtime credentials are NOT synced from git — they
+# are pre-created Secrets (scripts/secrets-bootstrap.sh, REQ-G-005).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -10,7 +12,7 @@ spec:
   project: case-poc
   source:
     repoURL: https://github.com/viktormandlbauer/bachelor-thesis-artefact.git
-    targetRevision: k8s-poc
+    targetRevision: phase2
     path: deploy/helm/anonymous-case-poc
     helm:
       releaseName: case-poc

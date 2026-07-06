@@ -2,16 +2,29 @@
 # Happy-path demo (plan §8.4): drives the full two-way anonymous case thread across
 # Artemis and prints the IDs needed to find the traces in SigNoz.
 #
-# Prerequisites: both services running (compose or quarkus dev), curl + jq installed.
+# Prerequisites: both services + Keycloak running (compose or quarkus dev),
+# curl + jq installed.
 #   SUBMISSION_URL (default http://localhost:8080)
 #   MANAGEMENT_URL (default http://localhost:8081)
+#   KEYCLOAK_URL   (default http://localhost:8180 — the compose port mapping)
 set -euo pipefail
 
 SUBMISSION_URL="${SUBMISSION_URL:-http://localhost:8080}"
 MANAGEMENT_URL="${MANAGEMENT_URL:-http://localhost:8081}"
+KEYCLOAK_URL="${KEYCLOAK_URL:-http://localhost:8180}"
 
 bold() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 fail() { printf '\033[31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
+
+# Phase 2: the management API requires a Keycloak JWT with the case-manager
+# role. Password-grant login as the demo user 'staff' (realm fixture).
+bold "0. OIDC login as staff (realm case-poc @ $KEYCLOAK_URL)"
+STAFF_TOKEN=$(curl -sf -X POST "$KEYCLOAK_URL/realms/case-poc/protocol/openid-connect/token" \
+  -d grant_type=password -d client_id=management-api \
+  -d username=staff -d password=staff-password | jq -r .access_token)
+[ -n "$STAFF_TOKEN" ] && [ "$STAFF_TOKEN" != "null" ] || fail "could not obtain staff token"
+AUTH="Authorization: Bearer $STAFF_TOKEN"
+echo "token acquired"
 
 # wait_for <description> <command producing json> <jq predicate>
 wait_for() {
@@ -48,14 +61,14 @@ curl -sf "$SUBMISSION_URL/api/cases/$CASE_ID" -H "X-Case-Token: $TOKEN" | jq .
 
 bold "4. Case appears in the management open-case list (via Artemis)"
 wait_for "case visible on management side" \
-  "curl -sf '$MANAGEMENT_URL/api/cases?status=open'" \
+  "curl -sf -H '$AUTH' '$MANAGEMENT_URL/api/cases?status=open'" \
   "[.[] | select(.caseId == \"$CASE_ID\")] | length == 1" | jq .
 
 bold "5. Management case detail"
-curl -sf "$MANAGEMENT_URL/api/cases/$CASE_ID" | jq .
+curl -sf -H "$AUTH" "$MANAGEMENT_URL/api/cases/$CASE_ID" | jq .
 
 bold "6. Management replies (POST $MANAGEMENT_URL/api/cases/$CASE_ID/reply)"
-reply_response=$(curl -sf -X POST "$MANAGEMENT_URL/api/cases/$CASE_ID/reply" \
+reply_response=$(curl -sf -X POST -H "$AUTH" "$MANAGEMENT_URL/api/cases/$CASE_ID/reply" \
   -H 'Content-Type: application/json' \
   -d '{"message":"Thank you for the report. We are investigating."}')
 echo "$reply_response" | jq .
@@ -76,7 +89,7 @@ EVENT_3=$(jq -r '.eventId' <<<"$followup_response")
 
 bold "9. Follow-up becomes visible on the management side (via Artemis)"
 wait_for "follow-up visible to management" \
-  "curl -sf '$MANAGEMENT_URL/api/cases/$CASE_ID'" \
+  "curl -sf -H '$AUTH' '$MANAGEMENT_URL/api/cases/$CASE_ID'" \
   '.messages | length == 3' | jq .
 
 bold "Demo complete"

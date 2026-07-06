@@ -12,6 +12,8 @@
   become: true
   vars:
     k3s_version: v1.36.2+k3s1
+    helm_version: v3.19.0
+    helm_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
     # Config files are copied from the controller's checkout; scripts that run
     # on the node use the repo mounted at /repo by scripts/vm-up.sh.
     k3s_cfg_src: "{{ playbook_dir | dirname | dirname }}/cluster/k3s"
@@ -69,6 +71,25 @@
       args:
         executable: /bin/bash
       when: k3s_installed.rc != 0 or k3s_version not in k3s_installed.stdout
+
+    # Helm on the node: lifecycle operations stay standard-CLI-only
+    # (REQ-F-009) and scripts/validate-requirements.sh exercises the
+    # install/upgrade/rollback acceptance criteria with plain helm.
+    - name: Check installed helm version
+      ansible.builtin.command: helm version --short
+      register: helm_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Install helm {{ helm_version }}
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -sfL "https://get.helm.sh/helm-{{ helm_version }}-linux-{{ helm_arch }}.tar.gz" | tar -xz -C /tmp
+        install -m 0755 "/tmp/linux-{{ helm_arch }}/helm" /usr/local/bin/helm
+        rm -rf "/tmp/linux-{{ helm_arch }}"
+      args:
+        executable: /bin/bash
+      when: helm_installed.rc != 0 or helm_version not in helm_installed.stdout
 
     - name: Restart k3s to pick up refreshed config
       ansible.builtin.systemd_service:

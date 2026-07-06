@@ -1,0 +1,13 @@
+# First-boot provisioning via the official image's /docker-entrypoint-initdb.d
+# mechanism. Mirrors infra/postgres/init/01-schemas-users.sql (the compose
+# variant), but takes the per-service passwords from the environment — i.e.
+# from the pre-created Secret — instead of hardcoding them (REQ-G-005).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "case-poc.fullname" . }}-postgres-init
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+data:
+  01-schemas-users.sh: |
+{{ .Files.Get "files/postgres-init.sh" | indent 4 }}

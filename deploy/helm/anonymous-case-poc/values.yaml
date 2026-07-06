@@ -1,22 +1,32 @@
 # Default values target the local single-node k3s POC cluster.
-# Images are built locally and imported into the node's containerd
+# Service images are built locally and imported into the node's containerd
 # (scripts/images-import.sh), hence IfNotPresent + fixed tags.
+#
+# No credential lives in this file (REQ-G-005): the chart only references the
+# pre-created Secrets listed under `secrets`, generated at bootstrap by
+# scripts/secrets-bootstrap.sh (called from scripts/argocd-install.sh).
 
 images:
   submission:
     repository: case-poc/submission-service
-    tag: "1.0.0"
+    tag: "2.0.0"
   management:
     repository: case-poc/management-service
-    tag: "1.0.0"
+    tag: "2.0.0"
   pullPolicy: IfNotPresent
+
+# Names of the pre-created Secrets (scripts/secrets-bootstrap.sh). The chart
+# never templates secret material into manifests.
+secrets:
+  # keys: ARTEMIS_USER, ARTEMIS_PASSWORD
+  artemis: case-poc-artemis-auth
+  # keys: POSTGRES_PASSWORD, SUBMISSION_DB_PASSWORD, MANAGEMENT_DB_PASSWORD
+  db: case-poc-db-auth
+  # keys: KC_BOOTSTRAP_ADMIN_USERNAME, KC_BOOTSTRAP_ADMIN_PASSWORD
+  keycloakAdmin: case-poc-keycloak-admin
 
 artemis:
   image: apache/activemq-artemis:2.44.0
-  # POC-only broker credentials (also consumed by both services).
-  # Real deployments would source these from an external secret store.
-  user: artemis
-  password: artemis
   # Numeric uid/gid of the 'artemis' user baked into the image. Required
   # explicitly: the image declares a named USER, which the kubelet cannot
   # verify against the restricted PSS runAsNonRoot rule.
@@ -34,6 +44,39 @@ artemis:
     limits:
       memory: 1Gi
 
+postgres:
+  image: postgres:17-alpine
+  # uid/gid of the 'postgres' user in the alpine image; the official image
+  # supports running as this non-root uid when the data dir is group-owned
+  # via fsGroup.
+  runAsUser: 70
+  runAsGroup: 70
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+keycloak:
+  image: quay.io/keycloak/keycloak:26.3
+  # uid of the 'keycloak' user in the image. gid stays 0 (root group): the
+  # image's file permissions follow the OpenShift convention (group-writable
+  # for gid 0), which restricted PSS permits — runAsNonRoot constrains the
+  # uid only.
+  runAsUser: 1000
+  runAsGroup: 0
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      memory: 1536Mi
+
 services:
   # Uid 1001 as set by USER in both service Dockerfiles.
   runAsUser: 1001
@@ -46,7 +89,9 @@ services:
 
 # Tracing export. The POC cluster runs no SigNoz/collector, so the OTel SDK
 # is disabled by default; point endpoint at a reachable OTLP gRPC collector
-# and set enabled=true to restore Phase-1 tracing.
+# and set enabled=true to restore Phase-1 tracing. Note: with the egress
+# NetworkPolicies enabled, an in-cluster collector also needs a matching
+# egress/ingress rule.
 otel:
   enabled: false
   endpoint: http://signoz-otel-collector:4317
@@ -59,6 +104,17 @@ ingress:
   # pins the real ingress IP (the multipass VM) via curl --resolve.
   submissionHost: submission.localtest.me
   managementHost: management.localtest.me
+  # Keycloak is routed through the same ingress. This host is also the OIDC
+  # issuer stamped into tokens (KC_HOSTNAME) and the issuer management-service
+  # verifies (QUARKUS_OIDC_TOKEN_ISSUER) — keep the three in sync by changing
+  # only this value.
+  keycloakHost: keycloak.localtest.me
 
 networkPolicies:
   enabled: true
+
+# The chart claims the namespace's default ServiceAccount to pin
+# automountServiceAccountToken: false (CIS 5.1.5). Disable for throwaway
+# plain-helm namespaces where the auto-created SA would collide with helm
+# ownership (scripts/validate-requirements.sh does this).
+hardenDefaultServiceAccount: true

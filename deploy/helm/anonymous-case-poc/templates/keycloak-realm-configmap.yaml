@@ -1,0 +1,15 @@
+# Realm case-poc: client management-api, realm role case-manager, demo users
+# staff (has the role) and intern (no role, for the 403 demo). The JSON is a
+# copy of infra/keycloak/case-poc-realm.json (the compose variant) — keep the
+# two in sync. The demo user passwords in the export are synthetic test
+# fixtures, not infrastructure secrets (REQ-G-005 disposition documented in
+# docs/requirements-validation.md).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "case-poc.fullname" . }}-keycloak-realm
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+data:
+  case-poc-realm.json: |
+{{ .Files.Get "files/case-poc-realm.json" | indent 4 }}

@@ -9,7 +9,7 @@
 #   bash scripts/images-import.sh [tag]
 set -euo pipefail
 
-TAG="${1:-1.0.0}"
+TAG="${1:-2.0.0}"
 VM_NAME="${VM_NAME:-case-poc}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"

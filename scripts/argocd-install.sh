@@ -27,6 +27,9 @@ kubectl -n argocd rollout status deployment argocd-redis --timeout=300s
 kubectl -n argocd rollout status deployment argocd-server --timeout=300s
 kubectl -n argocd rollout status statefulset argocd-application-controller --timeout=300s
 
+echo "==> Generating runtime secrets for the app namespace (REQ-G-005)"
+bash "$REPO_DIR/scripts/secrets-bootstrap.sh" case-poc
+
 echo "==> Applying AppProject and root Application"
 kubectl apply -f "$REPO_DIR/deploy/argocd/projects/case-poc.yaml"
 kubectl apply -f "$REPO_DIR/deploy/argocd/root-app.yaml"

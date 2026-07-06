@@ -1,0 +1,84 @@
+# Keycloak in dev mode with a declarative realm import — POC scope: the
+# embedded H2 store is ephemeral, but the realm (client management-api, role
+# case-manager, demo users) is re-imported from the ConfigMap on every start,
+# so the IdP state is fully versioned. Production mode (external DB, TLS,
+# KC_HOSTNAME strict) is a rollout concern, not a POC validation target.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "case-poc.fullname" . }}-keycloak
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+    app.kubernetes.io/name: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "case-poc.selectorLabels" (dict "root" . "component" "keycloak") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "case-poc.labels" . | nindent 8 }}
+        {{- include "case-poc.selectorLabels" (dict "root" . "component" "keycloak") | nindent 8 }}
+      annotations:
+        checksum/realm: {{ .Files.Get "files/case-poc-realm.json" | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "case-poc.podSecurityContext" (dict "uid" .Values.keycloak.runAsUser) | nindent 8 }}
+        runAsGroup: {{ .Values.keycloak.runAsGroup }}
+      containers:
+        - name: keycloak
+          image: {{ .Values.keycloak.image }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+            {{- include "case-poc.containerSecurityContext" . | nindent 12 }}
+          args: ["start-dev", "--import-realm"]
+          env:
+            # Fixed public hostname so every token carries the issuer
+            # http://<keycloakHost>/… regardless of where it was requested;
+            # the backchannel flag lets management-service still reach
+            # Keycloak service-locally for discovery/JWKS.
+            - name: KC_HOSTNAME
+              value: http://{{ .Values.ingress.keycloakHost }}
+            - name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC
+              value: "true"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+          # KC_BOOTSTRAP_ADMIN_USERNAME / KC_BOOTSTRAP_ADMIN_PASSWORD
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secrets.keycloakAdmin }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: mgmt
+              containerPort: 9000
+          volumeMounts:
+            - name: realm-import
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+          # Ready only after the realm import finished; first boot builds the
+          # server and imports the realm, which takes a while on the VM.
+          startupProbe:
+            httpGet:
+              path: /health/ready
+              port: mgmt
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: mgmt
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: mgmt
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.keycloak.resources | nindent 12 }}
+      volumes:
+        - name: realm-import
+          configMap:
+            name: {{ include "case-poc.fullname" . }}-keycloak-realm
