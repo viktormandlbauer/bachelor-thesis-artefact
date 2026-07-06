@@ -11,33 +11,57 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 
-import at.thesis.poc.management.domain.CaseRecord;
-import at.thesis.poc.management.domain.CaseStore;
-import at.thesis.poc.management.domain.MessageRecord;
+import at.thesis.poc.management.messaging.CaseInboundConsumer;
 import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.security.TestSecurity;
+import io.quarkus.test.security.oidc.Claim;
+import io.quarkus.test.security.oidc.OidcSecurity;
+import io.vertx.core.json.JsonObject;
 import jakarta.inject.Inject;
 
 /**
- * REST contract tests (plan §4.2). Cases are seeded through the store the same way the
- * inbound consumer creates them; replies exercise the real commit-after-publish path
- * against the Dev Services Artemis broker.
+ * REST contract and authorization tests (plan §5.2/§10.2). The OIDC tenant is disabled
+ * in the test profile; identities are injected with @TestSecurity/@OidcSecurity, which
+ * still exercises the @RolesAllowed checks: anonymous → 401, wrong role → 403, staff →
+ * 200, reply author from the JWT. Cases are seeded through the real inbound consumer,
+ * the same path the AMQP queue uses.
  */
 @QuarkusTest
 class CaseResourceTest {
 
     @Inject
-    CaseStore store;
+    CaseInboundConsumer consumer;
 
-    private CaseRecord seededCase() {
+    private String seededCaseId() {
         String caseId = UUID.randomUUID().toString();
-        Instant now = Instant.now();
-        CaseRecord record = store.getOrCreate(caseId, now);
-        record.append(new MessageRecord(UUID.randomUUID().toString(), caseId,
-                "inbound", "submission", 1, "reporter message", now));
-        return record;
+        consumer.onCaseInbound(new JsonObject()
+                .put("eventId", UUID.randomUUID().toString())
+                .put("caseId", caseId)
+                .put("direction", "inbound")
+                .put("author", "submission")
+                .put("seq", 1L)
+                .put("body", "reporter message")
+                .put("createdAt", Instant.now().toString()));
+        return caseId;
     }
 
     @Test
+    void anonymousRequestYields401() {
+        given().get("/api/cases").then().statusCode(401);
+        given().get("/api/cases/" + UUID.randomUUID()).then().statusCode(401);
+        given().contentType("application/json").body("{\"message\":\"hi\"}")
+                .post("/api/cases/" + UUID.randomUUID() + "/reply")
+                .then().statusCode(401);
+    }
+
+    @Test
+    @TestSecurity(user = "intern", roles = {})
+    void authenticatedWithoutCaseManagerRoleYields403() {
+        given().get("/api/cases").then().statusCode(403);
+    }
+
+    @Test
+    @TestSecurity(user = "staff", roles = {"case-manager"})
     void unknownCaseYields404() {
         given().get("/api/cases/00000000-0000-0000-0000-000000000000").then().statusCode(404);
         given().contentType("application/json").body("{\"message\":\"hi\"}")
@@ -46,53 +70,74 @@ class CaseResourceTest {
     }
 
     @Test
+    @TestSecurity(user = "staff", roles = {"case-manager"})
     void blankReplyYields400() {
-        CaseRecord record = seededCase();
+        String caseId = seededCaseId();
         given().contentType("application/json").body("{\"message\":\" \"}")
-                .post("/api/cases/" + record.caseId() + "/reply")
+                .post("/api/cases/" + caseId + "/reply")
                 .then().statusCode(400);
         given().contentType("application/json").body("{}")
-                .post("/api/cases/" + record.caseId() + "/reply")
+                .post("/api/cases/" + caseId + "/reply")
                 .then().statusCode(400);
     }
 
     @Test
+    @TestSecurity(user = "staff", roles = {"case-manager"})
     void openCaseListShowsSeededCase() {
-        CaseRecord record = seededCase();
+        String caseId = seededCaseId();
         given().get("/api/cases?status=open").then()
                 .statusCode(200)
                 .body("size()", greaterThanOrEqualTo(1))
-                .body("find { it.caseId == '" + record.caseId() + "' }.status", equalTo("open"))
-                .body("find { it.caseId == '" + record.caseId() + "' }.messageCount", equalTo(1))
-                .body("find { it.caseId == '" + record.caseId() + "' }.createdAt", notNullValue());
+                .body("find { it.caseId == '" + caseId + "' }.status", equalTo("open"))
+                .body("find { it.caseId == '" + caseId + "' }.messageCount", equalTo(1))
+                .body("find { it.caseId == '" + caseId + "' }.createdAt", notNullValue());
     }
 
     @Test
+    @TestSecurity(user = "staff", roles = {"case-manager"})
     void caseDetailShowsThread() {
-        CaseRecord record = seededCase();
-        given().get("/api/cases/" + record.caseId()).then()
+        String caseId = seededCaseId();
+        given().get("/api/cases/" + caseId).then()
                 .statusCode(200)
-                .body("caseId", equalTo(record.caseId()))
+                .body("caseId", equalTo(caseId))
                 .body("status", equalTo("open"))
                 .body("messages", hasSize(1))
                 .body("messages[0].author", equalTo("submission"));
     }
 
     @Test
-    void replyIsAcceptedAndAppendedAfterPublish() {
-        CaseRecord record = seededCase();
+    @TestSecurity(user = "staff", roles = {"case-manager"})
+    @OidcSecurity(claims = {
+            @Claim(key = "preferred_username", value = "staff.user")
+    })
+    void replyIsCommittedWithAuthorFromJwt() {
+        String caseId = seededCaseId();
         given().contentType("application/json")
                 .body("{\"message\":\"management answer\"}")
-                .post("/api/cases/" + record.caseId() + "/reply").then()
+                .post("/api/cases/" + caseId + "/reply").then()
                 .statusCode(202)
-                .body("caseId", equalTo(record.caseId()))
+                .body("caseId", equalTo(caseId))
                 .body("eventId", notNullValue())
                 .body("status", equalTo("accepted"));
 
-        given().get("/api/cases/" + record.caseId()).then()
+        given().get("/api/cases/" + caseId).then()
                 .statusCode(200)
                 .body("messages", hasSize(2))
-                .body("messages[1].author", equalTo("management"))
+                .body("messages[1].author", equalTo("staff.user"))
                 .body("messages[1].seq", equalTo(1));
+    }
+
+    @Test
+    @TestSecurity(user = "staff", roles = {"case-manager"})
+    void replyAuthorFallsBackToPrincipalName() {
+        String caseId = seededCaseId();
+        given().contentType("application/json")
+                .body("{\"message\":\"fallback author\"}")
+                .post("/api/cases/" + caseId + "/reply").then()
+                .statusCode(202);
+
+        given().get("/api/cases/" + caseId).then()
+                .statusCode(200)
+                .body("messages[1].author", equalTo("staff"));
     }
 }

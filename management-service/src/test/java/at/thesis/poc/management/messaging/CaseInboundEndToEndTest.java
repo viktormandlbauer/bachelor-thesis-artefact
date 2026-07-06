@@ -13,13 +13,15 @@ import org.eclipse.microprofile.reactive.messaging.Emitter;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.security.TestSecurity;
 import io.vertx.core.json.JsonObject;
 import jakarta.inject.Inject;
 
 /**
  * Full broker round trip on the Dev Services Artemis: a case.inbound event published
- * over real AMQP must land in the durable queue case.inbound.management (FQQN binding,
- * plan §7.4), be consumed, and surface as an open case in the management API.
+ * over real AMQP must land in the durable queue case.inbound.management (FQQN binding),
+ * pass the persistent inbox, and surface as an open case in the management API. The API
+ * read requires the case-manager role (plan §5.2), injected via @TestSecurity.
  */
 @QuarkusTest
 class CaseInboundEndToEndTest {
@@ -29,6 +31,7 @@ class CaseInboundEndToEndTest {
     Emitter<JsonObject> testEmitter;
 
     @Test
+    @TestSecurity(user = "staff", roles = {"case-manager"})
     void submittedCaseAppearsInManagementApi() throws Exception {
         String caseId = UUID.randomUUID().toString();
         JsonObject submissionEvent = new JsonObject()

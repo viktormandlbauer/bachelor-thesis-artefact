@@ -1,5 +1,6 @@
 package at.thesis.poc.submission.messaging;
 
+import static io.restassured.RestAssured.given;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -8,17 +9,17 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 
-import at.thesis.poc.submission.domain.CaseRecord;
-import at.thesis.poc.submission.domain.CaseStore;
+import at.thesis.poc.submission.domain.MessageRepository;
 import io.quarkus.test.junit.QuarkusTest;
 import io.vertx.core.json.JsonObject;
 import jakarta.inject.Inject;
 
 /**
- * Consumer semantics (plan §3.4/§6.2): idempotent by eventId, loud failure for
- * malformed or unprocessable events (a throw nacks the delivery so broker redelivery
- * and DLQ routing apply). Invokes the consumer directly with synthetic payloads, so
- * at-least-once redelivery is simulated by calling it twice.
+ * Consumer semantics (plan §5.4): idempotent by eventId via the persistent inbox, loud
+ * failure for malformed or unprocessable events (a throw rolls back and nacks the
+ * delivery so broker redelivery and DLQ routing apply). Invokes the consumer directly
+ * with synthetic payloads, so at-least-once redelivery is simulated by calling it twice.
+ * Cases are seeded through the real API so the token/outbox path stays exercised.
  */
 @QuarkusTest
 class CaseOutboundConsumerTest {
@@ -27,7 +28,7 @@ class CaseOutboundConsumerTest {
     CaseOutboundConsumer consumer;
 
     @Inject
-    CaseStore store;
+    MessageRepository messages;
 
     private static JsonObject outboundEvent(String eventId, String caseId, String body) {
         return new JsonObject()
@@ -40,21 +41,28 @@ class CaseOutboundConsumerTest {
                 .put("createdAt", Instant.now().toString());
     }
 
-    private CaseRecord knownCase() {
-        CaseRecord record = new CaseRecord(UUID.randomUUID().toString(), new byte[32], Instant.now());
-        store.commit(record);
-        return record;
+    private String knownCaseId() {
+        return given()
+                .contentType("application/json")
+                .body("{\"message\":\"seed report\"}")
+                .post("/api/cases")
+                .then().statusCode(201)
+                .extract().jsonPath().getString("caseId");
+    }
+
+    private long messageCount(String caseId) {
+        return messages.count("caseId", UUID.fromString(caseId));
     }
 
     @Test
     void duplicateDeliveryDoesNotDuplicateThreadMessages() {
-        CaseRecord record = knownCase();
-        JsonObject event = outboundEvent(UUID.randomUUID().toString(), record.caseId(), "reply");
+        String caseId = knownCaseId();
+        JsonObject event = outboundEvent(UUID.randomUUID().toString(), caseId, "reply");
 
         consumer.onCaseOutbound(event);
         consumer.onCaseOutbound(event);
 
-        assertEquals(1, record.messageCount());
+        assertEquals(2, messageCount(caseId), "seed message plus exactly one reply");
     }
 
     @Test
@@ -65,8 +73,8 @@ class CaseOutboundConsumerTest {
 
     @Test
     void wrongDirectionFailsLoudly() {
-        CaseRecord record = knownCase();
-        JsonObject event = outboundEvent(UUID.randomUUID().toString(), record.caseId(), "x")
+        String caseId = knownCaseId();
+        JsonObject event = outboundEvent(UUID.randomUUID().toString(), caseId, "x")
                 .put("direction", "inbound");
         assertThrows(IllegalArgumentException.class, () -> consumer.onCaseOutbound(event));
     }
@@ -79,9 +87,9 @@ class CaseOutboundConsumerTest {
 
     @Test
     void poisonMarkerFailsLoudly() {
-        CaseRecord record = knownCase();
-        JsonObject event = outboundEvent(UUID.randomUUID().toString(), record.caseId(), CaseEvents.POISON_MARKER);
+        String caseId = knownCaseId();
+        JsonObject event = outboundEvent(UUID.randomUUID().toString(), caseId, CaseEvents.POISON_MARKER);
         assertThrows(IllegalStateException.class, () -> consumer.onCaseOutbound(event));
-        assertEquals(0, record.messageCount(), "poison event must not be applied");
+        assertEquals(1, messageCount(caseId), "poison event must not be applied");
     }
 }

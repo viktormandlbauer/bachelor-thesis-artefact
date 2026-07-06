@@ -11,9 +11,10 @@ import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
 
 /**
- * REST contract tests (plan §4.1). Runs against a throwaway Artemis broker provided by
- * the Quarkus AMQP Dev Service, so successful POSTs exercise the real
- * commit-after-publish path.
+ * REST contract tests (plan §5.1). Runs against Dev Services PostgreSQL and Artemis; a
+ * successful POST means the local transaction (domain rows + outbox row) committed —
+ * the thread is immediately readable because it is local state, while delivery to the
+ * management side is the relay's asynchronous job.
  */
 @QuarkusTest
 class CaseResourceTest {
