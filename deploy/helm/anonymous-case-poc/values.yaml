@@ -55,8 +55,8 @@ otel:
 ingress:
   enabled: true
   className: traefik
-  # localtest.me resolves to 127.0.0.1 (public wildcard DNS), so these work
-  # from the Windows host against the WSL2-forwarded port 80.
+  # localtest.me resolves to 127.0.0.1 (public wildcard DNS); the demo script
+  # pins the real ingress IP (the multipass VM) via curl --resolve.
   submissionHost: submission.localtest.me
   managementHost: management.localtest.me
 

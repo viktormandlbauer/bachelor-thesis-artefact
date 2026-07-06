@@ -9,10 +9,15 @@ ActiveMQ Artemis) onto a single-node [k3s](https://k3s.io) cluster that
   repository; the Helm chart and the Argo CD `Application` manifests are the
   deployment mechanism.
 
+Day-2 interaction with the running environment (kubectl access, app API,
+deploying changes, consoles, troubleshooting) is documented in
+[k8s-poc-usage.md](k8s-poc-usage.md).
+
 ```text
-Windows 11 host
-├── Docker Desktop            -> builds the two service images (scripts/images-import.sh)
-└── WSL2 Ubuntu (systemd)
+Host = Ansible controller (macOS or Windows 11)
+├── Docker (Desktop)          -> builds the two service images (scripts/images-import.sh)
+├── ansible-playbook          -> provisions the VM over SSH (deploy/vm/ansible/)
+└── Multipass VM "case-poc"   -> Ubuntu 24.04
     └── k3s v1.36.2+k3s1      -> hardened per deploy/cluster/k3s/ (embedded etcd)
         ├── kube-system       -> traefik ingress, coredns, ... (token-automount hardened)
         ├── argocd            -> Argo CD v3.4.4, namespace-scoped, non-wildcard RBAC
@@ -22,6 +27,7 @@ Windows 11 host
 
 | Pinned component | Version |
 |---|---|
+| VM guest OS | Ubuntu `24.04` (multipass, provisioned by Ansible from the host) |
 | k3s (Kubernetes) | `v1.36.2+k3s1` |
 | Argo CD | `v3.4.4` (namespace-scoped install) |
 | kube-bench | `0.15.6`, benchmark `k3s-cis-1.9` |
@@ -30,33 +36,43 @@ Windows 11 host
 
 ## Prerequisites
 
-* Windows 11 with WSL2 and an Ubuntu distro with **systemd enabled**
-  (`/etc/wsl.conf`: `[boot] systemd=true`).
-* `%USERPROFILE%\.wslconfig` must boot the WSL kernel with **cgroup v2 only**
-  (`[wsl2] kernelCommandLine = cgroup_no_v1=all`), then `wsl --shutdown`.
-  Kubernetes ≥ 1.33 refuses to start on cgroup v1; Docker Desktop is
-  cgroup-v2 compatible.
-* Docker Desktop (only for building the images on the Windows side).
+* [Multipass](https://canonical.com/multipass) — the VM manager.
+  * On Windows, run the scripts from **Git Bash** and enable mounts once:
+    `multipass set local.privileged-mounts=true`.
+* [Ansible](https://docs.ansible.com) on the host — the host is the Ansible
+  **controller** (`brew install ansible`; on Windows, where a native control
+  node is unsupported, run it from WSL or another POSIX environment).
+* Docker (Desktop) — only for building the two service images on the host.
+* `curl` + `jq` on the host for the demo script.
+
+`scripts/vm-up.sh` wires controller and VM together: it generates a dedicated
+SSH keypair (`~/.ssh/multipass-case-poc`), authorizes it for the VM's `ubuntu`
+user, writes `deploy/vm/ansible/inventory.ini` (gitignored) with the current
+VM IP, and runs the playbook over SSH. Nothing is installed in the VM other
+than what the playbook itself manages.
 
 ## Bring-up from scratch
 
 ```bash
-# 1. Hardened k3s server inside WSL (installs curl/jq/git, sysctls, config,
-#    k3s itself, file-permission hardening, SA hardening in kube-system)
-wsl -d Ubuntu -u root bash /windir/c/dev/bachelor-thesis/bachelor-thesis-artefact/scripts/k3s-install.sh
+# 1. Launch the multipass VM, mount the repo at /repo, and provision the
+#    hardened k3s server with Ansible over SSH (curl/jq/git, sysctls, config,
+#    k3s itself, file-permission hardening, SA + kube-system hardening).
+#    Idempotent: re-run to re-apply the playbook.
+bash scripts/vm-up.sh
 
-# 2. Prove the CIS baseline (writes docs/reports/kube-bench-<date>.txt)
-wsl -d Ubuntu -u root bash /windir/c/dev/bachelor-thesis/bachelor-thesis-artefact/scripts/kube-bench-run.sh
+# 2. Prove the CIS baseline (writes docs/reports/kube-bench-<date>.txt on the
+#    host through the /repo mount)
+multipass exec case-poc -- sudo bash /repo/scripts/kube-bench-run.sh
 
 # 3. Build the Phase-1 service images and import them into k3s containerd
-#    (Git Bash on Windows, Docker Desktop running)
+#    (Docker running on the host)
 bash scripts/images-import.sh
 
 # 4. Bootstrap the GitOps control plane (Argo CD + AppProject + root app).
 #    Everything below deploy/argocd/apps/ is afterwards synced from GitHub.
-wsl -d Ubuntu -u root bash /windir/c/dev/bachelor-thesis/bachelor-thesis-artefact/scripts/argocd-install.sh
+multipass exec case-poc -- sudo bash /repo/scripts/argocd-install.sh
 
-# 5. End-to-end proof through the ingress
+# 5. End-to-end proof through the ingress (resolves the VM IP itself)
 bash scripts/k8s-demo.sh
 ```
 
@@ -72,7 +88,10 @@ pulled from git by Argo CD itself — pushing a change to the chart or an
 
 ```text
 deploy/
-├── cluster/k3s/          # node-level hardening, copied by scripts/k3s-install.sh
+├── vm/ansible/           # VM provisioning from the host (scripts/vm-up.sh)
+│   ├── ansible.cfg
+│   └── k3s-playbook.yml  #   CIS-hardened k3s install, applied over SSH
+├── cluster/k3s/          # node-level hardening, copied by the playbook
 │   ├── config.yaml       #   /etc/rancher/k3s/config.yaml
 │   ├── admission-config.yaml  # PodSecurity "restricted" default + EventRateLimit
 │   ├── audit-policy.yaml
@@ -88,15 +107,16 @@ deploy/
 
 Access:
 
-* API from Windows: `kubectl --kubeconfig <copy of /etc/rancher/k3s/k3s.yaml>`
-  (server `https://127.0.0.1:6443`, WSL forwards localhost).
+* API from the host: `kubectl --kubeconfig .vm-kubeconfig.yaml` — the
+  kubeconfig is exported (server rewritten to the VM IP) by `scripts/vm-up.sh`;
+  the VM IP is in the k3s serving-cert SANs, so TLS verification holds.
 * App: `http://submission.localtest.me` and `http://management.localtest.me`
-  (Traefik on port 80; `localtest.me` resolves to `127.0.0.1` — if your router's
-  DNS-rebind protection blocks that, use `curl --resolve`, as
-  `scripts/k8s-demo.sh` does).
-* Argo CD UI: `kubectl -n argocd port-forward svc/argocd-server 8443:443`,
-  login `admin` / `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d`.
-* Artemis console (DLQ inspection): `kubectl -n case-poc port-forward svc/case-poc-anonymous-case-poc-artemis 8161:8161`
+  against the **VM IP** (Traefik on port 80; `localtest.me` resolves to
+  `127.0.0.1`, so pin the IP with `curl --resolve`, as `scripts/k8s-demo.sh`
+  does — that also sidesteps router DNS-rebind protection).
+* Argo CD UI: `kubectl --kubeconfig .vm-kubeconfig.yaml -n argocd port-forward svc/argocd-server 8443:443`,
+  login `admin` / `kubectl --kubeconfig .vm-kubeconfig.yaml -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d`.
+* Artemis console (DLQ inspection): `kubectl --kubeconfig .vm-kubeconfig.yaml -n case-poc port-forward svc/case-poc-anonymous-case-poc-artemis 8161:8161`
   (port-forward intentionally bypasses the deny-by-default NetworkPolicies).
 
 ## How the kube-bench pass is achieved
@@ -116,9 +136,9 @@ What the defaults did not cover (everything versioned in this repo):
 | Kernel/kubelet (4.2.x) | sysctls in `90-kubelet-sysctl.conf` + `protect-kernel-defaults: true`, `make-iptables-util-chains=true`, `streaming-connection-idle-timeout=5m` |
 | API server (1.2.x) | audit logging, `EventRateLimit` + cluster-wide **restricted** PodSecurity via `admission-config.yaml`, `secrets-encryption: true` |
 | Datastore | embedded etcd (`cluster-init: true`) — the k3s-cis-1.9 profile audits the etcd files |
-| File permissions (1.1.x/4.1.x) | `chmod 600` sweep over k3s TLS/kubeconfig/CNI files in `k3s-install.sh` |
+| File permissions (1.1.x/4.1.x) | `chmod 600` sweep over k3s TLS/kubeconfig/CNI files in `deploy/vm/ansible/k3s-playbook.yml` |
 | 5.1.1/5.1.3 (RBAC) | Argo CD **namespace-scoped** install: no ClusterRoles, no wildcard rules; per-namespace Roles enumerate exactly the kinds the chart deploys (`deploy/argocd/install/case-poc/argocd-rbac.yaml`) |
-| 5.1.5 (default SAs) | `automountServiceAccountToken: false` on every namespace's default SA (install script + versioned SA manifests) |
+| 5.1.5 (default SAs) | `automountServiceAccountToken: false` on every namespace's default SA (playbook + versioned SA manifests) |
 | 5.1.6 (token mounts) | **No pod automounts SA tokens.** Pods that need the API (Argo CD controller/server, redis' secret-init, coredns, traefik, metrics-server, local-path-provisioner) mount an explicitly **projected, expiring token** instead — `scripts/harden-kube-system.sh` and the kustomize patches under `deploy/argocd/install/argocd/patches/` |
 
 Details worth knowing before re-running:
@@ -133,21 +153,23 @@ Details worth knowing before re-running:
   (whose SA has automount disabled) — temporarily revert that SA patch for the
   upgrade, then re-run the script and kube-bench.
 
-## WSL-specific pitfalls (already handled, documented for reproducibility)
+## Multipass-specific notes
 
-* **cgroup v2**: see prerequisites; without it the kubelet exits
-  (`kubelet is configured to not run on a host using cgroup v1`) and k3s
-  crash-loops.
-* **Docker Desktop WSL integration** mounts
-  `C:\Program Files\Docker\Docker\resources` into the distro with an unescaped
-  space in the mount options; the kubelet's `/proc/mounts` parser then fails
-  (`system validation failed - wrong number of fields (expected 6, got 7)`).
-  `k3s-install.sh` installs a systemd drop-in that unmounts `/Docker/host`
-  before every k3s start (the mount only serves the docker CLI proxy inside
-  the distro, which this setup does not use).
-* WSL stops the VM when idle; k3s (systemd unit) comes back automatically the
-  next time the distro starts. Durable state (etcd, Artemis journal on the
-  local-path PV) survives.
+* The repo is mounted at `/repo` inside the VM (`scripts/vm-up.sh`), so the
+  in-VM scripts always run against the working tree and `kube-bench-run.sh`
+  writes its report straight back to `docs/reports/` on the host. On Windows
+  the mount needs `multipass set local.privileged-mounts=true` once.
+* On Apple Silicon the VM (and hence k3s, kube-bench, the service images) is
+  arm64; every pinned component ships multi-arch images, and
+  `kube-bench-run.sh` picks the binary via `dpkg --print-architecture`.
+* `multipass stop case-poc` / `multipass start case-poc` park and resume the
+  cluster; k3s is a systemd unit and comes back on boot. Durable state (etcd,
+  Artemis journal on the local-path PV) survives. The VM IP can change across
+  restarts — re-run `scripts/vm-up.sh` to re-export `.vm-kubeconfig.yaml`
+  (the demo script resolves the current IP on every run).
+* The host-side scripts wrap `multipass` with `MSYS_NO_PATHCONV=1` so Git
+  Bash on Windows does not rewrite VM-side paths like `/repo/...`; host-side
+  paths are converted explicitly with `cygpath`.
 
 ## Scope notes / known limitations (POC)
 
@@ -164,6 +186,7 @@ Details worth knowing before re-running:
 ## Teardown
 
 ```bash
-wsl -d Ubuntu -u root /usr/local/bin/k3s-uninstall.sh   # removes k3s + data
-# optional: remove the cgroup line from %USERPROFILE%\.wslconfig
+multipass delete --purge case-poc   # removes the VM including k3s + data
+# or, to keep the VM but remove k3s:
+multipass exec case-poc -- sudo /usr/local/bin/k3s-uninstall.sh
 ```

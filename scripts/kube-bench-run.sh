@@ -5,9 +5,11 @@
 #
 # kube-bench runs directly on the node (not as a pod): the k3s-cis-1.9 profile
 # audits systemd journal entries (journalctl -u k3s) and files under
-# /var/lib/rancher, which are only reliably reachable from the host.
+# /var/lib/rancher, which are only reliably reachable from the node. Run it
+# inside the multipass VM (the repo is mounted at /repo by scripts/vm-up.sh;
+# the report lands in docs/reports/ on the host through the mount):
 #
-#   wsl -d Ubuntu -u root bash /windir/c/dev/bachelor-thesis/bachelor-thesis-artefact/scripts/kube-bench-run.sh
+#   multipass exec case-poc -- sudo bash /repo/scripts/kube-bench-run.sh
 #
 # Pass criterion: 0 checks in state FAIL. (WARN entries are the profile's
 # "manual verification" items; see docs/k8s-poc.md for their disposition.)
@@ -20,12 +22,15 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALL_DIR="/opt/kube-bench"
 REPORT_DIR="$REPO_DIR/docs/reports"
 
-[ "$(id -u)" -eq 0 ] || { echo "must run as root (wsl -u root)"; exit 1; }
+[ "$(id -u)" -eq 0 ] || { echo "must run as root (multipass exec ... -- sudo)"; exit 1; }
+
+# amd64 on Intel hosts, arm64 when the multipass VM runs on Apple Silicon
+ARCH="$(dpkg --print-architecture)"
 
 if [ ! -x "$INSTALL_DIR/kube-bench" ] || ! "$INSTALL_DIR/kube-bench" version | grep -q "$KUBE_BENCH_VERSION"; then
-  echo "==> Downloading kube-bench $KUBE_BENCH_VERSION"
+  echo "==> Downloading kube-bench $KUBE_BENCH_VERSION ($ARCH)"
   mkdir -p "$INSTALL_DIR"
-  curl -sfL "https://github.com/aquasecurity/kube-bench/releases/download/v${KUBE_BENCH_VERSION}/kube-bench_${KUBE_BENCH_VERSION}_linux_amd64.tar.gz" \
+  curl -sfL "https://github.com/aquasecurity/kube-bench/releases/download/v${KUBE_BENCH_VERSION}/kube-bench_${KUBE_BENCH_VERSION}_linux_${ARCH}.tar.gz" \
     | tar -xz -C "$INSTALL_DIR"
 fi
 

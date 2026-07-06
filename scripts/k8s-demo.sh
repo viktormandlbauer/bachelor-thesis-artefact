@@ -4,16 +4,17 @@
 # through the Traefik ingress): submit -> visible on management -> reply ->
 # visible on submission -> follow-up -> visible on management.
 #
-# Works from Git Bash on the Windows host or from WSL; requires curl + jq.
-# The *.localtest.me hosts resolve to 127.0.0.1, which WSL2 forwards to the
-# k3s ingress on port 80.
+# Works on the host (macOS terminal or Git Bash on Windows); requires
+# curl + jq + multipass. Traefik listens on port 80 of the multipass VM.
 set -euo pipefail
 
 SUBMISSION_HOST="${SUBMISSION_HOST:-submission.localtest.me}"
 MANAGEMENT_HOST="${MANAGEMENT_HOST:-management.localtest.me}"
-# Pin the ingress IP instead of trusting DNS: localtest.me resolves to
-# 127.0.0.1, which DNS-rebind protection on many routers refuses to answer.
-INGRESS_IP="${INGRESS_IP:-127.0.0.1}"
+# Pin the ingress IP (the multipass VM) instead of trusting DNS: localtest.me
+# resolves to 127.0.0.1, not to the VM — and DNS-rebind protection on many
+# routers refuses such answers anyway.
+VM_NAME="${VM_NAME:-case-poc}"
+INGRESS_IP="${INGRESS_IP:-$(multipass exec "$VM_NAME" -- hostname -I | tr -d '\r' | awk '{print $1}')}"
 
 SUBMISSION_URL="http://$SUBMISSION_HOST"
 MANAGEMENT_URL="http://$MANAGEMENT_HOST"

@@ -7,9 +7,10 @@
 #   2. applies the case-poc AppProject and the root app-of-apps Application
 #
 # After this, everything under deploy/argocd/apps/ is deployed and kept in
-# sync from GitHub by Argo CD itself. Run inside WSL:
+# sync from GitHub by Argo CD itself. Run inside the multipass VM (the repo
+# is mounted at /repo by scripts/vm-up.sh):
 #
-#   wsl -d Ubuntu -u root bash /windir/c/dev/bachelor-thesis/bachelor-thesis-artefact/scripts/argocd-install.sh
+#   multipass exec case-poc -- sudo bash /repo/scripts/argocd-install.sh
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

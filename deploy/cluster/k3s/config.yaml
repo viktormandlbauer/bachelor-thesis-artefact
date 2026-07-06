@@ -17,7 +17,7 @@ secrets-encryption: true
 
 # Kubelet refuses to start unless the kernel flags match its expectations
 # (CIS 4.2.5). Requires the sysctls from deploy/cluster/k3s/90-kubelet-sysctl.conf
-# to be applied first (done by scripts/k3s-install.sh).
+# to be applied first (done by deploy/vm/ansible/k3s-playbook.yml).
 protect-kernel-defaults: true
 
 kube-apiserver-arg:
