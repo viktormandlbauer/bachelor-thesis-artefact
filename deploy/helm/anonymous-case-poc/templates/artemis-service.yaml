@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "case-poc.fullname" . }}-artemis
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+    app.kubernetes.io/name: artemis
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "case-poc.selectorLabels" (dict "root" . "component" "artemis") | nindent 4 }}
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: amqp
+    - name: console
+      port: 8161
+      targetPort: console
+    - name: core
+      port: 61616
+      targetPort: core

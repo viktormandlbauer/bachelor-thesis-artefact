@@ -1,0 +1,35 @@
+# The application controller talks to the Kubernetes API, but its
+# ServiceAccount has automountServiceAccountToken: false (CIS 5.1.6).
+# Mount an explicitly projected, auto-rotated token at the well-known path
+# instead - functionally identical to automounting, but visible and auditable.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: argocd-application-controller
+spec:
+  template:
+    spec:
+      containers:
+        - name: argocd-application-controller
+          volumeMounts:
+            - name: argocd-sa-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+      volumes:
+        - name: argocd-sa-token
+          projected:
+            defaultMode: 0444
+            sources:
+              - serviceAccountToken:
+                  expirationSeconds: 3607
+                  path: token
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace

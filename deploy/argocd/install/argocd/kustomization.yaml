@@ -1,0 +1,59 @@
+# Argo CD v3.4.4, namespace-scoped install, hardened for the CIS-restricted POC
+# cluster (kube-bench profile k3s-cis-1.9):
+#
+#  * namespace-install manifests: only Roles/RoleBindings, no ClusterRoles and
+#    no wildcard RBAC rules (CIS 5.1.1/5.1.3).
+#  * every ServiceAccount gets automountServiceAccountToken: false; the pods
+#    that genuinely need the Kubernetes API (application-controller, server,
+#    redis' secret-init initContainer) mount an explicitly projected, expiring
+#    token instead (CIS 5.1.5/5.1.6).
+#  * dex, notifications and applicationset controllers are removed - unused in
+#    this POC, less attack surface, fewer tokens.
+#
+# All pods comply with the cluster-wide "restricted" Pod Security default.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: argocd
+
+resources:
+  - namespace.yaml
+  # Application/AppProject/ApplicationSet CRDs (cluster-scoped, not part of
+  # namespace-install.yaml).
+  - https://github.com/argoproj/argo-cd//manifests/crds?ref=v3.4.4
+  - https://raw.githubusercontent.com/argoproj/argo-cd/v3.4.4/manifests/namespace-install.yaml
+  - default-sa.yaml
+  - in-cluster-secret.yaml
+
+patches:
+  # --- CIS 5.1.6: no implicit token automount anywhere ----------------------
+  - target:
+      kind: ServiceAccount
+    patch: |-
+      - op: add
+        path: /automountServiceAccountToken
+        value: false
+
+  # --- Remove components this POC does not use ------------------------------
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: argocd-dex-server
+      $patch: delete
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: argocd-notifications-controller
+      $patch: delete
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: argocd-applicationset-controller
+      $patch: delete
+
+  # --- Explicit projected API tokens for pods that need the API -------------
+  - path: patches/application-controller-token.yaml
+  - path: patches/server-token.yaml
+  - path: patches/redis-token.yaml

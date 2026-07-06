@@ -1,0 +1,23 @@
+# The Phase-1 microservice application, rendered from the in-repo Helm chart.
+# Image tags/values are versioned in the chart's values.yaml; changing them in
+# git is the deployment mechanism.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: anonymous-case-poc
+  namespace: argocd
+spec:
+  project: case-poc
+  source:
+    repoURL: https://github.com/viktormandlbauer/bachelor-thesis-artefact.git
+    targetRevision: k8s-poc
+    path: deploy/helm/anonymous-case-poc
+    helm:
+      releaseName: case-poc
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: case-poc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

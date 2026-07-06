@@ -1,0 +1,24 @@
+# App-of-apps root: the only Application applied by hand
+# (scripts/argocd-install.sh). It syncs deploy/argocd/apps/, so adding an
+# Application manifest there and pushing is all it takes to deploy something
+# new - cluster state follows git.
+#
+# targetRevision tracks the k8s-poc branch; switch to HEAD once merged to main.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: case-poc
+  source:
+    repoURL: https://github.com/viktormandlbauer/bachelor-thesis-artefact.git
+    targetRevision: k8s-poc
+    path: deploy/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

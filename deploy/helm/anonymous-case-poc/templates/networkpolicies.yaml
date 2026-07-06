@@ -1,0 +1,61 @@
+{{- if .Values.networkPolicies.enabled }}
+# Namespace traffic rules (enforced by the k3s-embedded network policy
+# controller):
+#   - default: no ingress to any pod
+#   - HTTP into the two services only from kube-system (Traefik ingress)
+#   - AMQP/console/core into Artemis only from pods of this release
+# kubectl port-forward bypasses NetworkPolicy by design (kubelet-proxied),
+# so the Artemis console stays reachable for local DLQ inspection.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "case-poc.fullname" . }}-default-deny-ingress
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "case-poc.fullname" . }}-allow-http-from-ingress
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [submission-service, management-service]
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 8080
+        - port: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "case-poc.fullname" . }}-allow-artemis-from-app
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: artemis
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: anonymous-case-poc
+      ports:
+        - port: 5672
+        - port: 8161
+        - port: 61616
+{{- end }}

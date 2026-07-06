@@ -1,0 +1,34 @@
+# redis itself needs no API access, but its secret-init initContainer creates
+# the argocd-redis password Secret through the API on first start. Only that
+# initContainer gets the projected token (CIS 5.1.6).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-redis
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: secret-init
+          volumeMounts:
+            - name: argocd-sa-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+      volumes:
+        - name: argocd-sa-token
+          projected:
+            defaultMode: 0444
+            sources:
+              - serviceAccountToken:
+                  expirationSeconds: 3607
+                  path: token
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace

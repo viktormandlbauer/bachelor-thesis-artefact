@@ -1,0 +1,12 @@
+# Bootstrap kustomization for the GitOps control plane.
+# Applied once, out-of-band, by scripts/argocd-install.sh:
+#
+#   kubectl apply -k deploy/argocd/install
+#
+# Everything after this bootstrap is managed by Argo CD itself from git
+# (deploy/argocd/root-app.yaml -> deploy/argocd/apps/*).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - argocd
+  - case-poc

@@ -1,0 +1,13 @@
+# broker.xml is applied through the official image's etc-override mechanism:
+# files in /var/lib/artemis-instance/etc-override overwrite the generated
+# instance configuration on container start (same mechanism as the Phase-1
+# docker-compose setup; source of truth: infra/artemis/broker.xml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "case-poc.fullname" . }}-artemis-config
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+data:
+  broker.xml: |
+{{ .Files.Get "files/broker.xml" | indent 4 }}

@@ -1,0 +1,9 @@
+apiVersion: v2
+name: anonymous-case-poc
+description: >-
+  Phase-1 anonymous-case POC (submission-service + management-service +
+  ActiveMQ Artemis) packaged for the CIS-hardened k3s cluster. Deployed via
+  Argo CD (deploy/argocd/apps/anonymous-case-poc.yaml).
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

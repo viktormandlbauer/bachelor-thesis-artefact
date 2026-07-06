@@ -1,0 +1,8 @@
+# CIS 5.1.5: the default ServiceAccount of every namespace must not
+# automount API tokens. The application pods run under this account and do
+# not talk to the Kubernetes API at all.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: default
+automountServiceAccountToken: false

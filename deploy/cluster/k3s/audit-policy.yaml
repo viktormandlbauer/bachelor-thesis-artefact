@@ -1,0 +1,9 @@
+# /var/lib/rancher/k3s/server/audit-policy.yaml
+#
+# Minimal API audit policy for the POC: log metadata (who did what and when,
+# no request/response bodies) for every request. Enough to demonstrate
+# CIS 1.2.16-1.2.19 audit logging without drowning the node in I/O.
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+  - level: Metadata

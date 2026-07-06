@@ -1,0 +1,19 @@
+{{- if .Values.artemis.persistence.enabled }}
+# Journal/paging/bindings of the broker instance. Keeps durable case.* queues
+# (and their messages) across broker pod restarts - the Phase-1 resilience
+# property "buffered messages survive consumer/broker downtime".
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "case-poc.fullname" . }}-artemis-data
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.artemis.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.artemis.persistence.size }}
+{{- end }}

@@ -1,0 +1,64 @@
+# Default values target the local single-node k3s POC cluster.
+# Images are built locally and imported into the node's containerd
+# (scripts/images-import.sh), hence IfNotPresent + fixed tags.
+
+images:
+  submission:
+    repository: case-poc/submission-service
+    tag: "1.0.0"
+  management:
+    repository: case-poc/management-service
+    tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+artemis:
+  image: apache/activemq-artemis:2.44.0
+  # POC-only broker credentials (also consumed by both services).
+  # Real deployments would source these from an external secret store.
+  user: artemis
+  password: artemis
+  # Numeric uid/gid of the 'artemis' user baked into the image. Required
+  # explicitly: the image declares a named USER, which the kubelet cannot
+  # verify against the restricted PSS runAsNonRoot rule.
+  runAsUser: 1001
+  runAsGroup: 1001
+  persistence:
+    enabled: true
+    size: 1Gi
+    # empty = cluster default StorageClass (local-path on k3s)
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+services:
+  # Uid 1001 as set by USER in both service Dockerfiles.
+  runAsUser: 1001
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+# Tracing export. The POC cluster runs no SigNoz/collector, so the OTel SDK
+# is disabled by default; point endpoint at a reachable OTLP gRPC collector
+# and set enabled=true to restore Phase-1 tracing.
+otel:
+  enabled: false
+  endpoint: http://signoz-otel-collector:4317
+  resourceAttributes: service.namespace=anonymous-case-poc,deployment.environment=k3s-poc
+
+ingress:
+  enabled: true
+  className: traefik
+  # localtest.me resolves to 127.0.0.1 (public wildcard DNS), so these work
+  # from the Windows host against the WSL2-forwarded port 80.
+  submissionHost: submission.localtest.me
+  managementHost: management.localtest.me
+
+networkPolicies:
+  enabled: true

@@ -1,0 +1,34 @@
+{{- if .Values.ingress.enabled }}
+# Host-routed HTTP through the k3s-bundled Traefik. Phase-1 scope: no TLS,
+# and the management API is deliberately unauthenticated (Keycloak comes in
+# Phase 2) - acceptable only because the cluster is local-only.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "case-poc.fullname" . }}
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.submissionHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "case-poc.fullname" . }}-submission
+                port:
+                  name: http
+    - host: {{ .Values.ingress.managementHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "case-poc.fullname" . }}-management
+                port:
+                  name: http
+{{- end }}

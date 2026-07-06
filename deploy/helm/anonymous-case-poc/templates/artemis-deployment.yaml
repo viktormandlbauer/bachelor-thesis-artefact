@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "case-poc.fullname" . }}-artemis
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+    app.kubernetes.io/name: artemis
+spec:
+  replicas: 1
+  # RWO volume: the old pod must release the journal before a new one starts.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "case-poc.selectorLabels" (dict "root" . "component" "artemis") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "case-poc.labels" . | nindent 8 }}
+        {{- include "case-poc.selectorLabels" (dict "root" . "component" "artemis") | nindent 8 }}
+      annotations:
+        checksum/broker-config: {{ .Files.Get "files/broker.xml" | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "case-poc.podSecurityContext" (dict "uid" .Values.artemis.runAsUser) | nindent 8 }}
+        runAsGroup: {{ .Values.artemis.runAsGroup }}
+        fsGroup: {{ .Values.artemis.runAsGroup }}
+      containers:
+        - name: artemis
+          image: {{ .Values.artemis.image }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+            {{- include "case-poc.containerSecurityContext" . | nindent 12 }}
+          envFrom:
+            - secretRef:
+                name: {{ include "case-poc.fullname" . }}-artemis-auth
+          ports:
+            - name: amqp
+              containerPort: 5672
+            - name: console
+              containerPort: 8161
+            - name: core
+              containerPort: 61616
+          volumeMounts:
+            {{- if .Values.artemis.persistence.enabled }}
+            - name: data
+              mountPath: /var/lib/artemis-instance
+            {{- end }}
+            - name: broker-config
+              mountPath: /var/lib/artemis-instance/etc-override
+              readOnly: true
+          # Instance creation on first boot takes a while; probe AMQP directly.
+          startupProbe:
+            tcpSocket:
+              port: amqp
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            tcpSocket:
+              port: amqp
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: amqp
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.artemis.resources | nindent 12 }}
+      volumes:
+        {{- if .Values.artemis.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "case-poc.fullname" . }}-artemis-data
+        {{- end }}
+        - name: broker-config
+          configMap:
+            name: {{ include "case-poc.fullname" . }}-artemis-config

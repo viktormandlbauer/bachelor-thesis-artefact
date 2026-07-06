@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "case-poc.fullname" . }}-submission
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+    app.kubernetes.io/name: submission-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "case-poc.selectorLabels" (dict "root" . "component" "submission-service") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "case-poc.labels" . | nindent 8 }}
+        {{- include "case-poc.selectorLabels" (dict "root" . "component" "submission-service") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "case-poc.podSecurityContext" (dict "uid" .Values.services.runAsUser) | nindent 8 }}
+      containers:
+        - name: submission-service
+          image: "{{ .Values.images.submission.repository }}:{{ .Values.images.submission.tag }}"
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+            {{- include "case-poc.containerSecurityContext" . | nindent 12 }}
+          env:
+            - name: AMQP_HOST
+              value: {{ include "case-poc.fullname" . }}-artemis
+            - name: AMQP_PORT
+              value: "5672"
+            - name: AMQP_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "case-poc.fullname" . }}-artemis-auth
+                  key: ARTEMIS_USER
+            - name: AMQP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "case-poc.fullname" . }}-artemis-auth
+                  key: ARTEMIS_PASSWORD
+            {{- if .Values.otel.enabled }}
+            - name: QUARKUS_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+              value: {{ .Values.otel.endpoint | quote }}
+            - name: QUARKUS_OTEL_RESOURCE_ATTRIBUTES
+              value: {{ .Values.otel.resourceAttributes | quote }}
+            {{- else }}
+            # No OTLP collector in the POC cluster; silence the exporter.
+            - name: QUARKUS_OTEL_SDK_DISABLED
+              value: "true"
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+          startupProbe:
+            httpGet:
+              path: /q/health/ready
+              port: http
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            # Includes the AMQP connector: not ready until the broker link is up.
+            httpGet:
+              path: /q/health/ready
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /q/health/live
+              port: http
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.services.resources | nindent 12 }}
