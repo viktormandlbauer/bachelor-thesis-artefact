@@ -3,7 +3,7 @@ package at.thesis.poc.management.messaging;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 
-import at.thesis.poc.management.domain.MessageRecord;
+import at.thesis.poc.management.domain.MessageEntity;
 import io.vertx.core.json.JsonObject;
 
 /**
@@ -32,15 +32,15 @@ public final class CaseEvents {
                             long seq, String body, Instant createdAt) {
     }
 
-    public static JsonObject toJson(MessageRecord message) {
+    public static JsonObject toJson(MessageEntity message) {
         return new JsonObject()
-                .put("eventId", message.eventId())
-                .put("caseId", message.caseId())
-                .put("direction", message.direction())
-                .put("author", message.author())
-                .put("seq", message.seq())
-                .put("body", message.body())
-                .put("createdAt", message.createdAt().toString());
+                .put("eventId", message.eventId.toString())
+                .put("caseId", message.caseId.toString())
+                .put("direction", message.direction)
+                .put("author", message.author)
+                .put("seq", message.seq)
+                .put("body", message.body)
+                .put("createdAt", message.createdAt.toString());
     }
 
     public static CaseEvent parse(JsonObject json) {

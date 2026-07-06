@@ -1,4 +1,8 @@
-# Anonymous-case POC: Artemis broker + the two Quarkus services (plan §8.2).
+# Anonymous-case POC — Phase 2 stack: Artemis broker, PostgreSQL, Keycloak, and the two
+# Quarkus services (plan §9). Compose is the parity environment for the later k3s
+# deployment: every environment-specific value is injected via `environment:` (the
+# future ConfigMap/Secret), startup ordering uses health checks (the future readiness
+# probes), and the images are the ones that will be imported into the cluster.
 #
 # The observability stack lives in infra/signoz/docker-compose.yaml and must be started
 # first, because the app services join its "signoz-net" network to reach the OTLP
@@ -7,8 +11,8 @@
 #   docker compose -f infra/signoz/docker-compose.yaml up -d
 #   docker compose -f infra/docker-compose.yml up -d --build
 #
-# Faster inner loop: start only artemis here and run the services on the host with
-# `mvn quarkus:dev` (they default to localhost:5672 / localhost:4317).
+# Faster inner loop: start only artemis/postgres/keycloak here and run the services on
+# the host with `mvn quarkus:dev` (they default to localhost endpoints).
 name: anonymous-case-poc
 
 services:
@@ -27,7 +31,7 @@ services:
     volumes:
       # Copied over the generated instance config on first start (etc-override
       # mechanism of the official image). Defines the case.* addresses, durable
-      # queues, DLQ, and bounded redelivery (plan §8.3).
+      # queues, DLQ, and bounded redelivery (plan §8.3 of Phase 1).
       - ./artemis/broker.xml:/var/lib/artemis-instance/etc-override/broker.xml:ro
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/5672'"]
@@ -36,17 +40,73 @@ services:
       retries: 12
       start_period: 10s
 
+  postgres:
+    image: postgres:17-alpine
+    container_name: poc-postgres
+    environment:
+      POSTGRES_DB: case_poc
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      # Creates the per-service schemas/users/grants on first start (plan §6).
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      # Named volume so §10.1 (restart the app services, data survives) is honest even
+      # across a full `docker compose restart`; `down -v` resets the demo.
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d case_poc"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.3
+    container_name: poc-keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # Fixed public hostname so tokens always carry issuer http://localhost:8180/…
+      # no matter whether they were requested from the host or from inside the
+      # network; the backchannel flag lets management-service still reach Keycloak
+      # as http://keycloak:8080 for JWKS/discovery.
+      KC_HOSTNAME: http://localhost:8180
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8180:8080"   # realm console + token endpoint (host)
+    volumes:
+      # Realm case-poc: client management-api, realm role case-manager, users
+      # staff (has role) and intern (no role, for the 403 demo) — plan §9/§10.2.
+      - ./keycloak/case-poc-realm.json:/opt/keycloak/data/import/case-poc-realm.json:ro
+    healthcheck:
+      # Management interface (:9000) /health/ready; the image ships no curl, so use
+      # bash's /dev/tcp. Ready only after the realm import finished.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/9000; printf \"GET /health/ready HTTP/1.0\\r\\n\\r\\n\" >&3; grep -q \"\\\"status\\\": \\\"UP\\\"\" <&3'"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 20s
+
   submission-service:
     build: ../submission-service
     container_name: poc-submission-service
     depends_on:
       artemis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       AMQP_HOST: artemis
       AMQP_PORT: "5672"
       AMQP_USERNAME: artemis
       AMQP_PASSWORD: artemis
+      DB_URL: jdbc:postgresql://postgres:5432/case_poc
+      DB_USERNAME: submission_service
+      DB_PASSWORD: submission_service
       QUARKUS_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://signoz-otel-collector:4317
       QUARKUS_OTEL_RESOURCE_ATTRIBUTES: service.namespace=anonymous-case-poc,deployment.environment=local
     ports:
@@ -61,11 +121,22 @@ services:
     depends_on:
       artemis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
     environment:
       AMQP_HOST: artemis
       AMQP_PORT: "5672"
       AMQP_USERNAME: artemis
       AMQP_PASSWORD: artemis
+      DB_URL: jdbc:postgresql://postgres:5432/case_poc
+      DB_USERNAME: management_service
+      DB_PASSWORD: management_service
+      # Discovery/JWKS over the backchannel; issuer check pinned to the public
+      # hostname Keycloak stamps into every token (see KC_HOSTNAME above).
+      QUARKUS_OIDC_AUTH_SERVER_URL: http://keycloak:8080/realms/case-poc
+      QUARKUS_OIDC_TOKEN_ISSUER: http://localhost:8180/realms/case-poc
       QUARKUS_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://signoz-otel-collector:4317
       QUARKUS_OTEL_RESOURCE_ATTRIBUTES: service.namespace=anonymous-case-poc,deployment.environment=local
     ports:
@@ -73,6 +144,9 @@ services:
     networks:
       - default
       - signoz-net
+
+volumes:
+  postgres-data:
 
 networks:
   default:

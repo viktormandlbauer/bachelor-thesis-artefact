@@ -1,39 +1,53 @@
 package at.thesis.poc.management.messaging;
 
+import java.time.Instant;
+import java.util.UUID;
+
 import org.eclipse.microprofile.reactive.messaging.Incoming;
 
-import at.thesis.poc.management.domain.CaseRecord;
-import at.thesis.poc.management.domain.CaseStore;
-import at.thesis.poc.management.domain.MessageRecord;
-import at.thesis.poc.management.domain.TraceContextRef;
+import at.thesis.poc.management.domain.CaseEntity;
+import at.thesis.poc.management.domain.CaseRepository;
+import at.thesis.poc.management.domain.InboxRepository;
+import at.thesis.poc.management.domain.MessageEntity;
+import at.thesis.poc.management.domain.MessageRepository;
 import at.thesis.poc.management.messaging.CaseEvents.CaseEvent;
 import at.thesis.poc.management.observability.TraceAttributes;
+import at.thesis.poc.management.observability.Traceparent;
 import io.opentelemetry.api.trace.Span;
 import io.quarkus.logging.Log;
+import io.smallrye.common.annotation.Blocking;
 import io.vertx.core.json.JsonObject;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import jakarta.transaction.Transactional;
 
 /**
  * Consumes submissions and follow-ups from the durable queue case.inbound.management.
- * The first inbound event of a case creates the management-side copy as "open" (plan §3.1).
+ * The first inbound event of a case creates the management-side projection as "open".
  *
- * The payload-style signature uses SmallRye's post-processing acknowledgement: a normal
- * return acks the message only after successful processing, and a thrown exception nacks
- * it so the channel's failure strategy (reject) hands it to Artemis' bounded-redelivery
- * and DLQ machinery (plan §6.2). A Message<T> signature would make acknowledgement
- * manual and a throw would leave the delivery unsettled forever.
+ * Persistent-inbox pattern (plan §5.4): the inbox insert and the message apply share one
+ * transaction; a normal return commits and acks, a throw rolls back and nacks so the
+ * channel's failure strategy (reject) hands the delivery to Artemis' bounded-redelivery
+ * and DLQ machinery. Duplicates — broker redelivery, or overlapping pods during a
+ * rolling update — are detected on the inbox row and acked without effect.
  *
- * Delivery is at-least-once: processing is idempotent by eventId (in-process only,
- * plan §3.4).
+ * @Blocking moves processing off the I/O thread so JDBC is allowed.
  */
 @ApplicationScoped
 public class CaseInboundConsumer {
 
     @Inject
-    CaseStore store;
+    CaseRepository cases;
+
+    @Inject
+    MessageRepository messages;
+
+    @Inject
+    InboxRepository inbox;
 
     @Incoming("case-inbound-in")
+    @Blocking
+    @Transactional
     public void onCaseInbound(JsonObject payload) {
         CaseEvent event = CaseEvents.parse(payload);
         if (!CaseEvents.DIRECTION_INBOUND.equals(event.direction())) {
@@ -48,18 +62,42 @@ public class CaseInboundConsumer {
         TraceAttributes.annotate(span, event.caseId(), event.eventId(),
                 event.direction(), event.author(), CaseEvents.ADDRESS_INBOUND);
 
-        if (store.isProcessed(event.eventId())) {
+        // Malformed UUIDs throw → nack → redelivery → DLQ, like any unprocessable event.
+        UUID eventId = UUID.fromString(event.eventId());
+        UUID caseId = UUID.fromString(event.caseId());
+
+        if (inbox.isProcessed(eventId)) {
             Log.infof("Duplicate delivery of event %s for case %s ignored", event.eventId(), event.caseId());
             span.setAttribute("app.duplicate_delivery", true);
             return;
         }
+        inbox.record(eventId, Instant.now());
 
-        CaseRecord caseRecord = store.getOrCreate(event.caseId(), event.createdAt());
-        MessageRecord record = new MessageRecord(event.eventId(), event.caseId(),
-                event.direction(), event.author(), event.seq(), event.body(), event.createdAt());
-        record.traceContext(TraceContextRef.from(span.getSpanContext()));
-        caseRecord.append(record);
-        store.markProcessed(event.eventId());
+        CaseEntity caseEntity = cases.findById(caseId);
+        if (caseEntity == null) {
+            caseEntity = new CaseEntity();
+            caseEntity.caseId = caseId;
+            caseEntity.status = CaseEntity.STATUS_OPEN;
+            caseEntity.createdAt = event.createdAt();
+            caseEntity.updatedAt = event.createdAt();
+            cases.persist(caseEntity);
+        }
+
+        MessageEntity message = new MessageEntity();
+        message.messageId = UUID.randomUUID();
+        message.eventId = eventId;
+        message.caseId = caseId;
+        message.direction = event.direction();
+        message.author = event.author();
+        message.seq = event.seq();
+        message.body = event.body();
+        message.traceparent = Traceparent.of(span.getSpanContext());
+        message.createdAt = event.createdAt();
+        messages.persist(message);
+
+        if (event.createdAt().isAfter(caseEntity.updatedAt)) {
+            caseEntity.updatedAt = event.createdAt();
+        }
         Log.infof("Applied inbound event %s to case %s", event.eventId(), event.caseId());
     }
 }

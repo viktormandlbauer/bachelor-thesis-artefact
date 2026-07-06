@@ -1,26 +1,21 @@
 package at.thesis.poc.submission.api;
 
-import java.time.Instant;
 import java.util.Map;
-import java.util.UUID;
 
 import at.thesis.poc.submission.api.ApiDtos.AppendMessageResponse;
 import at.thesis.poc.submission.api.ApiDtos.CaseView;
 import at.thesis.poc.submission.api.ApiDtos.CreateCaseResponse;
 import at.thesis.poc.submission.api.ApiDtos.MessageRequest;
-import at.thesis.poc.submission.domain.CaseRecord;
-import at.thesis.poc.submission.domain.CaseStore;
-import at.thesis.poc.submission.domain.MessageRecord;
-import at.thesis.poc.submission.messaging.CaseEventPublisher;
+import at.thesis.poc.submission.domain.CaseService;
+import at.thesis.poc.submission.domain.CaseService.CaseCreation;
+import at.thesis.poc.submission.domain.CaseService.MessageAppend;
 import at.thesis.poc.submission.messaging.CaseEvents;
 import at.thesis.poc.submission.observability.TraceAttributes;
-import at.thesis.poc.submission.security.TokenService;
 import io.opentelemetry.api.trace.Span;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.HeaderParam;
-import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
@@ -30,10 +25,11 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 /**
- * Anonymous submission API (plan §3.1/§3.2/§4.1). The access token is the only
- * credential; a wrong or missing token yields 404 (never 403) so the existence of a
- * case is not confirmed. All authored events use commit-after-publish: local state
- * becomes visible only after Artemis accepted the event.
+ * Anonymous submission API (plan §5.1). The access token is the only credential; a wrong
+ * or missing token yields 404 (never 403) so the existence of a case is not confirmed.
+ * Phase 2 semantics: a successful POST means the local transaction (domain rows + outbox
+ * row) committed — delivery to the management side is the outbox relay's job and is
+ * eventually consistent (plan §2/§12).
  */
 @Path("/api/cases")
 @Produces(MediaType.APPLICATION_JSON)
@@ -44,35 +40,19 @@ public class CaseResource {
             "Save this access token now. It is shown only once and cannot be recovered.";
 
     @Inject
-    CaseStore store;
-
-    @Inject
-    TokenService tokens;
-
-    @Inject
-    CaseEventPublisher publisher;
+    CaseService service;
 
     @POST
     public Response createCase(MessageRequest request) {
         String body = requireMessage(request);
-        Instant now = Instant.now();
-        String caseId = UUID.randomUUID().toString();
-        String eventId = UUID.randomUUID().toString();
-        String accessToken = tokens.generate();
+        CaseCreation creation = service.createCase(body);
 
-        CaseRecord staged = new CaseRecord(caseId, tokens.hash(accessToken), now);
-        MessageRecord message = new MessageRecord(eventId, caseId, CaseEvents.DIRECTION_INBOUND,
-                CaseEvents.AUTHOR_SUBMISSION, staged.nextAuthoredSeq(), body, now);
-
-        TraceAttributes.annotate(Span.current(), caseId, eventId,
+        TraceAttributes.annotate(Span.current(), creation.caseId(), creation.eventId(),
                 CaseEvents.DIRECTION_INBOUND, CaseEvents.AUTHOR_SUBMISSION, null);
 
-        publisher.publishInbound(message, null);
-        staged.append(message);
-        store.commit(staged);
-
         return Response.status(Response.Status.CREATED)
-                .entity(new CreateCaseResponse(caseId, eventId, accessToken, TOKEN_NOTE))
+                .entity(new CreateCaseResponse(creation.caseId(), creation.eventId(),
+                        creation.accessToken(), TOKEN_NOTE))
                 .build();
     }
 
@@ -80,9 +60,8 @@ public class CaseResource {
     @Path("{caseId}")
     public CaseView getCase(@PathParam("caseId") String caseId,
                             @HeaderParam("X-Case-Token") String token) {
-        CaseRecord caseRecord = requireAuthorized(caseId, token);
         TraceAttributes.annotate(Span.current(), caseId, null, null, null, null);
-        return CaseView.of(caseRecord);
+        return CaseView.of(service.getThread(caseId, token));
     }
 
     @POST
@@ -91,21 +70,13 @@ public class CaseResource {
                                   @HeaderParam("X-Case-Token") String token,
                                   MessageRequest request) {
         String body = requireMessage(request);
-        CaseRecord caseRecord = requireAuthorized(caseId, token);
+        MessageAppend appended = service.appendReporterMessage(caseId, token, body);
 
-        String eventId = UUID.randomUUID().toString();
-        MessageRecord message = new MessageRecord(eventId, caseId, CaseEvents.DIRECTION_INBOUND,
-                CaseEvents.AUTHOR_SUBMISSION, caseRecord.nextAuthoredSeq(), body, Instant.now());
-
-        TraceAttributes.annotate(Span.current(), caseId, eventId,
+        TraceAttributes.annotate(Span.current(), appended.caseId(), appended.eventId(),
                 CaseEvents.DIRECTION_INBOUND, CaseEvents.AUTHOR_SUBMISSION, null);
 
-        // Span-link target: latest prior opposite-direction event (plan §11 default).
-        publisher.publishInbound(message, caseRecord.latestTraceContext(CaseEvents.DIRECTION_OUTBOUND));
-        caseRecord.append(message);
-
         return Response.status(Response.Status.ACCEPTED)
-                .entity(new AppendMessageResponse(caseId, eventId, "accepted"))
+                .entity(new AppendMessageResponse(appended.caseId(), appended.eventId(), "accepted"))
                 .build();
     }
 
@@ -117,13 +88,5 @@ public class CaseResource {
                     .build());
         }
         return request.message().trim();
-    }
-
-    private CaseRecord requireAuthorized(String caseId, String token) {
-        CaseRecord caseRecord = store.get(caseId);
-        if (caseRecord == null || !tokens.matches(token, caseRecord.tokenHash())) {
-            throw new NotFoundException();
-        }
-        return caseRecord;
     }
 }

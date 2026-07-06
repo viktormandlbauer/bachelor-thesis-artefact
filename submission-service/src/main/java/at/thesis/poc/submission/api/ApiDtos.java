@@ -3,10 +3,10 @@ package at.thesis.poc.submission.api;
 import java.time.Instant;
 import java.util.List;
 
-import at.thesis.poc.submission.domain.CaseRecord;
-import at.thesis.poc.submission.domain.MessageRecord;
+import at.thesis.poc.submission.domain.CaseService.CaseThread;
+import at.thesis.poc.submission.domain.MessageEntity;
 
-/** Request/response payloads of the submission API (plan §4.1). */
+/** Request/response payloads of the submission API (plan §5.1). */
 public final class ApiDtos {
 
     private ApiDtos() {
@@ -23,17 +23,17 @@ public final class ApiDtos {
 
     public record MessageView(String eventId, String author, long seq, String body, Instant createdAt) {
 
-        static MessageView of(MessageRecord record) {
-            return new MessageView(record.eventId(), record.author(), record.seq(),
-                    record.body(), record.createdAt());
+        static MessageView of(MessageEntity message) {
+            return new MessageView(message.eventId.toString(), message.author, message.seq,
+                    message.body, message.createdAt);
         }
     }
 
     public record CaseView(String caseId, String status, List<MessageView> messages) {
 
-        static CaseView of(CaseRecord record) {
-            return new CaseView(record.caseId(), record.status(),
-                    record.sortedMessages().stream().map(MessageView::of).toList());
+        static CaseView of(CaseThread thread) {
+            return new CaseView(thread.caseEntity().caseId.toString(), thread.caseEntity().status,
+                    thread.messages().stream().map(MessageView::of).toList());
         }
     }
 }

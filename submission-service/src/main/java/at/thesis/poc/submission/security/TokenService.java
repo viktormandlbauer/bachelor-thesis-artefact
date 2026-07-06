@@ -38,4 +38,22 @@ public class TokenService {
         }
         return MessageDigest.isEqual(storedHash, hash(presentedToken));
     }
+
+    /** Text form of the hash for the database column (base64url, plan §6). */
+    public String hashToText(String token) {
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(hash(token));
+    }
+
+    public boolean matchesHash(String presentedToken, String storedHashText) {
+        if (storedHashText == null || storedHashText.isBlank()) {
+            return false;
+        }
+        byte[] storedHash;
+        try {
+            storedHash = Base64.getUrlDecoder().decode(storedHashText);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+        return matches(presentedToken, storedHash);
+    }
 }
