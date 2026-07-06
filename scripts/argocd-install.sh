@@ -16,7 +16,9 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 
 echo "==> Applying Argo CD install kustomization (pinned v3.4.4)"
-kubectl apply -k "$REPO_DIR/deploy/argocd/install"
+# Server-side apply: the ApplicationSet CRD exceeds the 256KiB annotation limit
+# of client-side apply. --force-conflicts keeps re-runs idempotent.
+kubectl apply --server-side --force-conflicts -k "$REPO_DIR/deploy/argocd/install"
 
 echo "==> Waiting for Argo CD components"
 kubectl -n argocd rollout status deployment argocd-repo-server --timeout=300s

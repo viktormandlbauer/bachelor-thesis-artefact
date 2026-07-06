@@ -9,8 +9,18 @@
 # k3s ingress on port 80.
 set -euo pipefail
 
-SUBMISSION_URL="${SUBMISSION_URL:-http://submission.localtest.me}"
-MANAGEMENT_URL="${MANAGEMENT_URL:-http://management.localtest.me}"
+SUBMISSION_HOST="${SUBMISSION_HOST:-submission.localtest.me}"
+MANAGEMENT_HOST="${MANAGEMENT_HOST:-management.localtest.me}"
+# Pin the ingress IP instead of trusting DNS: localtest.me resolves to
+# 127.0.0.1, which DNS-rebind protection on many routers refuses to answer.
+INGRESS_IP="${INGRESS_IP:-127.0.0.1}"
+
+SUBMISSION_URL="http://$SUBMISSION_HOST"
+MANAGEMENT_URL="http://$MANAGEMENT_HOST"
+curl() {
+  command curl --resolve "$SUBMISSION_HOST:80:$INGRESS_IP" \
+               --resolve "$MANAGEMENT_HOST:80:$INGRESS_IP" "$@"
+}
 
 say() { printf '\n== %s\n' "$*"; }
 

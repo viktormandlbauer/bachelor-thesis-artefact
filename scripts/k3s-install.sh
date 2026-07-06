@@ -31,6 +31,20 @@ install -m 0600 "$K3S_CFG_SRC/config.yaml"           /etc/rancher/k3s/config.yam
 install -m 0600 "$K3S_CFG_SRC/admission-config.yaml" /var/lib/rancher/k3s/server/admission-config.yaml
 install -m 0600 "$K3S_CFG_SRC/audit-policy.yaml"     /var/lib/rancher/k3s/server/audit-policy.yaml
 
+echo "==> Working around Docker Desktop WSL integration vs kubelet"
+# Docker Desktop's WSL integration adds a 9p mount whose options contain an
+# unescaped space ("...path=C:\Program Files\Docker..."), which kubelet's
+# /proc/mounts parser rejects ("system validation failed - wrong number of
+# fields (expected 6, got 7)") and k3s crash-loops. The mount only serves the
+# docker CLI proxy inside this distro (unused here - images are imported via
+# 'k3s ctr'), so drop it before every k3s start.
+mkdir -p /etc/systemd/system/k3s.service.d
+cat > /etc/systemd/system/k3s.service.d/10-unmount-docker-desktop.conf <<'EOF'
+[Service]
+ExecStartPre=-/bin/sh -c 'while umount /Docker/host 2>/dev/null; do :; done'
+EOF
+systemctl daemon-reload
+
 if command -v k3s >/dev/null 2>&1 && [ "$(k3s --version | head -1 | awk '{print $3}')" = "$K3S_VERSION" ]; then
   echo "==> k3s $K3S_VERSION already installed; restarting to pick up config"
   systemctl restart k3s
@@ -60,6 +74,9 @@ for ns in $(k3s kubectl get ns -o jsonpath='{.items[*].metadata.name}'); do
   k3s kubectl -n "$ns" patch serviceaccount default \
     -p '{"automountServiceAccountToken": false}' >/dev/null || true
 done
+
+echo "==> Hardening k3s-bundled kube-system workloads (CIS 5.1.6)"
+bash "$REPO_DIR/scripts/harden-kube-system.sh"
 
 echo "==> Done. Cluster info:"
 k3s kubectl get node -o wide

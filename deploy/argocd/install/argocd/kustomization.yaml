@@ -25,6 +25,19 @@ resources:
   - in-cluster-secret.yaml
 
 patches:
+  # --- Namespaced RBAC + cluster cache ---------------------------------------
+  # The controller enumerates all namespaced resource types in its managed
+  # namespaces; without this it hard-fails on the first Forbidden list call
+  # (its Roles deliberately cover only what the POC deploys, CIS 5.1.3).
+  # "normal" makes the cache skip resource types RBAC denies.
+  - patch: |-
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: argocd-cm
+      data:
+        resource.respectRBAC: normal
+
   # --- CIS 5.1.6: no implicit token automount anywhere ----------------------
   - target:
       kind: ServiceAccount
