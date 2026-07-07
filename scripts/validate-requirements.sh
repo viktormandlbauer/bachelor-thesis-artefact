@@ -164,7 +164,10 @@ v1=$(kubectl -n "$NS_TEST" logs deploy/cfg-demo | head -1)
 kubectl -n "$NS_TEST" create configmap cfg-demo --from-literal=GREETING=value-two -o yaml --dry-run=client | kubectl -n "$NS_TEST" apply -f - >/dev/null
 kubectl -n "$NS_TEST" rollout restart deploy/cfg-demo >/dev/null
 kubectl -n "$NS_TEST" rollout status deploy/cfg-demo --timeout=120s >/dev/null
-v2=$(kubectl -n "$NS_TEST" logs deploy/cfg-demo | head -1)
+# Read the NEWEST pod explicitly: right after the rollout the old pod may
+# still be Terminating and `logs deploy/...` can pick it.
+new_pod=$(kubectl -n "$NS_TEST" get pods -l app=cfg-demo --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}')
+v2=$(kubectl -n "$NS_TEST" logs "$new_pod" | head -1)
 if [ "$v1" = "GREETING=value-one" ] && [ "$v2" = "GREETING=value-two" ]; then
   record REQ-F-006 PASS "pod saw '$v1' before and '$v2' after ConfigMap update + restart, no image rebuild"
 else
@@ -237,12 +240,12 @@ fi
 # ingress while helm upgrade rolls the two service deployments.
 say "REQ-F-003: continuous probe during helm upgrade"
 PROBE_LOG=$(mktemp)
+touch "$PROBE_LOG.run"
 ( end=$(( $(date +%s) + 600 ))
   while [ "$(date +%s)" -lt "$end" ] && [ -f "$PROBE_LOG.run" ]; do
     icurl -s -o /dev/null -w '%{http_code}\n' --max-time 2 http://submission-test.localtest.me/q/health/live >> "$PROBE_LOG"
     sleep 0.2
   done ) & PROBE_PID=$!
-touch "$PROBE_LOG.run"
 t0=$(date +%s)
 helm upgrade req "$CHART" -n "$NS_HELM" "${HELM_SET[@]}" \
   --set services.resources.requests.cpu=110m --wait --timeout 10m >/dev/null 2>&1
@@ -265,8 +268,14 @@ say "REQ-F-004 + REQ-O-005: helm rollback to revision 1"
 t0=$(date +%s)
 if helm rollback req 1 -n "$NS_HELM" --wait --timeout 10m >/dev/null 2>&1; then
   t_rollback=$(( $(date +%s) - t0 ))
-  code=$(icurl -s -o /dev/null -w '%{http_code}' -X POST http://submission-test.localtest.me/api/cases \
-    -H 'Content-Type: application/json' -d '{"message":"post-rollback probe"}')
+  # Ingress endpoints may take a moment to switch to the rolled-back pods.
+  code=000
+  for i in $(seq 1 15); do
+    code=$(icurl -s -o /dev/null -w '%{http_code}' -X POST http://submission-test.localtest.me/api/cases \
+      -H 'Content-Type: application/json' -d '{"message":"post-rollback probe"}')
+    [ "$code" = "200" ] || [ "$code" = "201" ] && break
+    sleep 2
+  done
   rev=$(helm status req -n "$NS_HELM" -o json | jq -r .version)
   if [ "$code" = "200" ] || [ "$code" = "201" ]; then
     record REQ-F-004 PASS "helm rollback restored revision 1 (now at release revision $rev); application answered $code post-rollback"

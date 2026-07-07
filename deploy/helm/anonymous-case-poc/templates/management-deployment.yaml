@@ -74,6 +74,13 @@ spec:
           ports:
             - name: http
               containerPort: 8081
+          # Keep the old pod serving while the ingress/endpoint update
+          # propagates during rolling updates (zero-downtime, REQ-F-003);
+          # Quarkus then drains in-flight requests (quarkus.shutdown.timeout).
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
           startupProbe:
             httpGet:
               path: /q/health/ready
