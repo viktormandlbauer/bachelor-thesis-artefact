@@ -1,0 +1,73 @@
+timestamp_utc,platform,metric,run,value,unit,notes
+2026-07-07T13:58:07Z,compose,cold_start,1,1.0,s,systemctl start docker -> docker info OK
+2026-07-07T13:58:38Z,compose,platform_rss_total,1,118.8,MiB,procs=1839+1863
+2026-07-07T13:58:48Z,compose,platform_cpu_idle,1,0.10,pct,pidstat 10s; ncpu=4; pids=2
+2026-07-07T13:58:48Z,compose,platform_disk_binaries,1,178.9,MiB,dockerd+docker+containerd+shim+runc
+2026-07-07T13:58:49Z,compose,platform_disk_state,1,2532,MiB,/var/lib/docker + /var/lib/containerd (incl. images)
+2026-07-07T13:58:49Z,compose,image_store,1,0,MiB,layer store
+2026-07-07T13:58:49Z,compose,version,1,Docker version 29.1.3 build 29.1.3-0ubuntu3~24.04.2,text,Docker Compose version 2.40.3+ds1-0ubuntu1~24.04.1
+2026-07-07T13:58:49Z,compose,os,1,Ubuntu 24.04.4 LTS,text,kernel 6.8.0-124-generic
+2026-07-07T14:08:21Z,compose,install_time,1,19.4,s,command -> tag 2.0.0 running + all endpoints 200
+2026-07-07T14:08:25Z,compose,upgrade_time,1,4.1,s,command -> tag 2.0.1 running + all endpoints 200
+2026-07-07T14:08:30Z,compose,rollback_time,1,4.0,s,command -> tag 2.0.0 running + all endpoints 200
+2026-07-07T14:12:14Z,compose,workload_rss_management-service,1,266.2,MiB,mid-load; 
+2026-07-07T14:12:14Z,compose,workload_rss_submission-service,1,268.2,MiB,mid-load; 
+2026-07-07T14:12:14Z,compose,workload_rss_postgres,1,139.0,MiB,mid-load; 
+2026-07-07T14:12:14Z,compose,workload_rss_artemis,1,264.3,MiB,mid-load; 
+2026-07-07T14:12:14Z,compose,workload_rss_keycloak,1,500.8,MiB,mid-load; 
+2026-07-07T14:12:14Z,compose,workload_rss_total,1,1438.5,MiB,mid-load; all workload containers
+2026-07-07T14:12:24Z,compose,http_throughput,1,10.030932701574212,rps,target 10 rps for 20s
+2026-07-07T14:12:24Z,compose,http_p50,1,9.246,ms,
+2026-07-07T14:12:24Z,compose,http_p95,1,35.32,ms,
+2026-07-07T14:12:24Z,compose,http_p99,1,50.53,ms,
+2026-07-07T14:12:24Z,compose,http_error_rate,1,0,ratio,of 201 requests; dropped=0
+2026-07-07T14:12:27Z,compose,startup_time,1,2.9,s,docker start -> /q/health/ready 200
+2026-07-07T14:12:34Z,podman,cold_start,1,0,s,daemonless engine; no platform service to start
+2026-07-07T14:13:04Z,podman,platform_rss_total,1,0.0,MiB,procs=
+2026-07-07T14:13:04Z,podman,platform_cpu_idle,1,0,pct,no platform processes (daemonless)
+2026-07-07T14:13:04Z,podman,platform_disk_binaries,1,61.9,MiB,podman+conmon+netavark+aardvark+runtime
+2026-07-07T14:13:05Z,podman,platform_disk_state,1,1584,MiB,/var/lib/containers (incl. images)
+2026-07-07T14:13:05Z,podman,image_store,1,1582,MiB,layer store
+2026-07-07T14:13:05Z,podman,version,1,podman version 4.9.3,text,
+2026-07-07T14:13:05Z,podman,os,1,Ubuntu 24.04.4 LTS,text,kernel 6.8.0-124-generic
+2026-07-07T14:27:07Z,podman,install_time,1,18.6,s,command -> tag 2.0.0 running + all endpoints 200
+2026-07-07T14:27:11Z,podman,upgrade_time,1,3.9,s,command -> tag 2.0.1 running + all endpoints 200
+2026-07-07T14:27:15Z,podman,rollback_time,1,4.0,s,command -> tag 2.0.0 running + all endpoints 200
+2026-07-07T14:27:56Z,podman,workload_rss_artemis,1,244.5,MiB,mid-load; 
+2026-07-07T14:27:56Z,podman,workload_rss_postgres,1,138.8,MiB,mid-load; 
+2026-07-07T14:27:56Z,podman,workload_rss_keycloak,1,495.8,MiB,mid-load; 
+2026-07-07T14:27:56Z,podman,workload_rss_submission-service-submission,1,266.0,MiB,mid-load; 
+2026-07-07T14:27:56Z,podman,workload_rss_management-service-management,1,261.4,MiB,mid-load; 
+2026-07-07T14:27:56Z,podman,workload_rss_total,1,1406.4,MiB,mid-load; all workload containers
+2026-07-07T14:28:06Z,podman,http_throughput,1,9.998986602707816,rps,target 10 rps for 20s
+2026-07-07T14:28:06Z,podman,http_p50,1,11.9865,ms,
+2026-07-07T14:28:06Z,podman,http_p95,1,34.227099999999986,ms,
+2026-07-07T14:28:06Z,podman,http_p99,1,42.113049999999994,ms,
+2026-07-07T14:28:06Z,podman,http_error_rate,1,0,ratio,of 200 requests; dropped=0
+2026-07-07T14:28:09Z,podman,startup_time,1,3.0,s,podman pod start -> /q/health/ready 200
+2026-07-07T14:30:06Z,k3s,cold_start,1,12.3,s,k3s-killall -> node Ready + kube-system/argocd deployments available (argocd controller at 0)
+2026-07-07T14:30:36Z,k3s,platform_rss_core,1,1003.2,MiB,k3s+containerd+shims
+2026-07-07T14:30:37Z,k3s,platform_rss_argocd,1,221.3,MiB,pod processes in argocd
+2026-07-07T14:30:37Z,k3s,platform_rss_kube_system,1,243.2,MiB,pod processes in kube-system
+2026-07-07T14:30:37Z,k3s,platform_rss_total,1,1467.7,MiB,core+kube-system+argocd
+2026-07-07T14:30:48Z,k3s,platform_cpu_idle,1,12.09,pct,pidstat 10s; ncpu=4; pids=22
+2026-07-07T14:30:48Z,k3s,platform_disk_binaries,1,70.3,MiB,k3s single binary
+2026-07-07T14:30:50Z,k3s,platform_disk_state,1,5344,MiB,/var/lib/rancher + /var/lib/kubelet + /etc/rancher (incl. images)
+2026-07-07T14:30:50Z,k3s,image_store,1,4385,MiB,containerd content+snapshots
+2026-07-07T14:30:50Z,k3s,version,1,k3s version v1.36.2+k3s1 (01b6f04a),text,
+2026-07-07T14:30:50Z,k3s,os,1,Ubuntu 24.04.4 LTS,text,kernel 6.8.0-134-generic
+2026-07-07T14:31:14Z,k3s,install_time,1,22.9,s,command -> tag 2.0.0 running + all endpoints 200
+2026-07-07T14:31:22Z,k3s,upgrade_time,1,6.9,s,command -> tag 2.0.1 running + all endpoints 200
+2026-07-07T14:31:28Z,k3s,rollback_time,1,6.6,s,command -> tag 2.0.0 running + all endpoints 200
+2026-07-07T14:32:25Z,k3s,workload_rss_postgres,1,139.5,MiB,mid-load; 
+2026-07-07T14:32:25Z,k3s,workload_rss_artemis,1,253.8,MiB,mid-load; 
+2026-07-07T14:32:25Z,k3s,workload_rss_submission-service,1,262.4,MiB,mid-load; 
+2026-07-07T14:32:25Z,k3s,workload_rss_keycloak,1,503.3,MiB,mid-load; 
+2026-07-07T14:32:25Z,k3s,workload_rss_management-service,1,262.8,MiB,mid-load; 
+2026-07-07T14:32:25Z,k3s,workload_rss_total,1,1421.7,MiB,mid-load; all workload containers
+2026-07-07T14:32:35Z,k3s,http_throughput,1,10.046807124695771,rps,target 10 rps for 20s
+2026-07-07T14:32:36Z,k3s,http_p50,1,7.492,ms,
+2026-07-07T14:32:36Z,k3s,http_p95,1,23.329,ms,
+2026-07-07T14:32:36Z,k3s,http_p99,1,31.096,ms,
+2026-07-07T14:32:36Z,k3s,http_error_rate,1,0,ratio,of 201 requests; dropped=0
+2026-07-07T14:32:42Z,k3s,startup_time,1,4,s,pod creationTimestamp -> Ready condition (API timestamps)

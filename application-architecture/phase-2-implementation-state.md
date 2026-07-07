@@ -66,18 +66,17 @@ wired via ConfigMap-free env + pre-created Secrets (`scripts/secrets-bootstrap.s
 REQ-G-005). Requirements-catalogue validation is automated in
 `scripts/validate-requirements.sh` (see `docs/requirements-validation.md`).
 
-## Known follow-ups / risks
+## Remaining follow-ups
 
-- Existing tests assume in-memory store and commit-after-publish semantics
-  (`CaseResourceTest`, `*EndToEndTest`, `CaseOutboundConsumerTest`); they need rework:
-  Dev Services will provide PostgreSQL (testcontainers) + Artemis automatically, and
-  management tests need `quarkus-test-security`/OIDC handling.
+- §10.6 visual trace check is still manual: open the SigNoz UI while running
+  `scripts/demo.sh`-style traffic and confirm one trace across
+  HTTP → outbox → AMQP → consumer → DB.
 - SigNoz stack must be running (`infra/signoz/docker-compose.yaml`) before
   `infra/docker-compose.yml` because of the external `signoz-net` network.
-- k3s/Helm updates are the infrastructure track — out of scope here until §10 passes.
+- Resolved: test rework (slice 7); k3s/Helm promotion (section above).
 
-## Resume instructions
+## Log closed
 
-1. Read `phase-2-plan.md` (§5–§8 for semantics, §11 for order) and this file.
-2. Continue at the first non-done slice in the table above.
-3. After each slice: build (`mvn -q package` in the service dir), update this file, commit.
+All slices and the k3s promotion are done; nothing to resume. Current entry points:
+`docs/k8s-poc.md` (cluster runbook), `docs/requirements-validation.md` (validation
+method), `docs/measurement-comparison.md` (SRQ3 measurements).

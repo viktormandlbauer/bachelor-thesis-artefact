@@ -1,5 +1,13 @@
 # Phase 1 — Architecture & Runbook
 
+> **Superseded by Phase 2.** This describes the Phase 1 baseline (in-memory state,
+> commit-after-publish, unauthenticated management API). The current application adds
+> PostgreSQL persistence, a transactional outbox/inbox, and Keycloak OIDC — see
+> [e2e-messaging-architecture.md](e2e-messaging-architecture.md) and
+> [../application-architecture/phase-2-implementation-state.md](../application-architecture/phase-2-implementation-state.md).
+> The compose runbook commands in §5 still apply to the current stack (same entry
+> points; the compose file now also starts PostgreSQL and Keycloak).
+
 Implementation of [application-architecture/phase-1-plan.md](../application-architecture/phase-1-plan.md):
 a minimal, fully traceable microservice pair that proves **one distributed trace per
 HTTP-triggered user action across an asynchronous ActiveMQ Artemis (AMQP 1.0) hop**, with
@@ -43,7 +51,7 @@ infra/
 scripts/
   demo.sh             happy path (plan §8.4)
   resilience.sh       resilience checks (plan §8.5)
-docs/architecture.md  this file
+docs/phase-1-architecture.md  this file
 ```
 
 ## 2. Messaging design

@@ -1,0 +1,137 @@
+# Measurement variant of infra/docker-compose.yml (SRQ3 comparison, docker
+# compose platform). Differences to the development stack are exactly the
+# ones needed for a fair comparison with the k3s chart:
+#
+#   * service images are pinned tags (loaded beforehand by
+#     measure/images-load.sh), never built — same images as the cluster;
+#     TAG drives the upgrade/rollback lifecycle (M-LC-02/03).
+#   * OpenTelemetry SDK disabled — the k3s PoC runs otel.enabled=false, so
+#     neither platform pays tracing overhead.
+#   * no SigNoz network; the stack is self-contained.
+#   * memory limits mirror deploy/helm/anonymous-case-poc/values.yaml
+#     (the chart sets no CPU limits, so none are set here either).
+#
+# Config files (broker.xml, postgres init, realm) are the same files the
+# development compose uses, via the /repo mount in the case-engines VM.
+name: measure-compose
+
+services:
+  artemis:
+    image: apache/activemq-artemis:2.44.0
+    container_name: measure-artemis
+    environment:
+      ARTEMIS_USER: artemis
+      ARTEMIS_PASSWORD: artemis
+    volumes:
+      - ../../infra/artemis/broker.xml:/var/lib/artemis-instance/etc-override/broker.xml:ro
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/5672'"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: measure-postgres
+    environment:
+      POSTGRES_DB: case_poc
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ../../infra/postgres/init:/docker-entrypoint-initdb.d:ro
+      - postgres-data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d case_poc"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.3
+    container_name: measure-keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HOSTNAME: http://localhost:8180
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8180:8080"
+    volumes:
+      - ../../infra/keycloak/case-poc-realm.json:/opt/keycloak/data/import/case-poc-realm.json:ro
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/9000; printf \"GET /health/ready HTTP/1.0\\r\\n\\r\\n\" >&3; grep -q \"\\\"status\\\": \\\"UP\\\"\" <&3'"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 20s
+
+  submission-service:
+    image: case-poc/submission-service:${TAG:-2.0.0}
+    container_name: measure-submission-service
+    depends_on:
+      artemis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      AMQP_HOST: artemis
+      AMQP_PORT: "5672"
+      AMQP_USERNAME: artemis
+      AMQP_PASSWORD: artemis
+      DB_URL: jdbc:postgresql://postgres:5432/case_poc
+      DB_USERNAME: submission_service
+      DB_PASSWORD: submission_service
+      QUARKUS_OTEL_SDK_DISABLED: "true"
+    ports:
+      - "8080:8080"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  management-service:
+    image: case-poc/management-service:${TAG:-2.0.0}
+    container_name: measure-management-service
+    depends_on:
+      artemis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    environment:
+      AMQP_HOST: artemis
+      AMQP_PORT: "5672"
+      AMQP_USERNAME: artemis
+      AMQP_PASSWORD: artemis
+      DB_URL: jdbc:postgresql://postgres:5432/case_poc
+      DB_USERNAME: management_service
+      DB_PASSWORD: management_service
+      QUARKUS_OIDC_AUTH_SERVER_URL: http://keycloak:8080/realms/case-poc
+      QUARKUS_OIDC_TOKEN_ISSUER: http://localhost:8180/realms/case-poc
+      QUARKUS_OTEL_SDK_DISABLED: "true"
+    ports:
+      - "8081:8081"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+volumes:
+  postgres-data:

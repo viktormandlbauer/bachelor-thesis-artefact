@@ -29,7 +29,7 @@ The repo (`bachelor-thesis-artefact`) currently contains only architecture docum
 ├── scripts/
 │   ├── demo.sh                # curl+jq happy path (§8.4)
 │   └── resilience.sh          # §8.5 checks (wrong token, blank msg, duplicate, DLQ)
-└── docs/architecture.md       # restated architecture + observability smoke-test guide (§5.5)
+└── docs/phase-1-architecture.md       # restated architecture + observability smoke-test guide (§5.5)
 ```
 
 DTOs are small and **duplicated per service** (spec §10.4 — no shared domain library): `CaseEvent`, request/response records.
@@ -94,7 +94,7 @@ JUnit + RestAssured `@QuarkusTest` per service; AMQP Dev Services (Testcontainer
 6. SigNoz compose integration + service Dockerfiles + full-compose wiring.
 7. `scripts/demo.sh` + `scripts/resilience.sh`.
 8. Tests (§ above).
-9. `docs/architecture.md` incl. §5.5 smoke-test walkthrough + §8.6 trace demo checklist.
+9. `docs/phase-1-architecture.md` incl. §5.5 smoke-test walkthrough + §8.6 trace demo checklist.
 
 ## Verification (definition of done)
 

@@ -75,7 +75,7 @@ bash scripts/vm-up.sh
 #    host through the /repo mount)
 multipass exec case-poc -- sudo bash /repo/scripts/kube-bench-run.sh
 
-# 3. Build the Phase-1 service images and import them into k3s containerd
+# 3. Build the two service images and import them into k3s containerd
 #    (Docker running on the host)
 bash scripts/images-import.sh
 

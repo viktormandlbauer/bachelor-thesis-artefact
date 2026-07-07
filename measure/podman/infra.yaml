@@ -1,0 +1,127 @@
+# Backing services for the podman kube play platform (SRQ3 comparison):
+# Artemis, PostgreSQL, Keycloak as plain Pods — podman kube play has no
+# Deployment/rolling-update primitive, which is exactly the capability gap
+# the comparison documents (protocol Dimension 4, Q-02/Q-03).
+#
+# Parity notes:
+#   * same images, env and config files as measure/compose/docker-compose.yml
+#     (config via hostPath to /opt/measure/infra, synced from /repo/infra by
+#     stack_prepare — podman rejects hostPaths on the sshfs /repo mount);
+#   * memory limits mirror deploy/helm/anonymous-case-poc/values.yaml;
+#   * pods are played onto a dedicated netavark network (measure-net) whose
+#     DNS resolves pod names — artemis/postgres/keycloak, matching the
+#     compose service names and the k8s Service names semantics.
+#   * app pods live in app.yaml.tpl so upgrade/rollback replaces only them.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: artemis
+  labels:
+    app: measure-artemis
+spec:
+  restartPolicy: Always
+  containers:
+    - name: artemis
+      image: docker.io/apache/activemq-artemis:2.44.0
+      env:
+        - name: ARTEMIS_USER
+          value: artemis
+        - name: ARTEMIS_PASSWORD
+          value: artemis
+      resources:
+        limits:
+          memory: 1024Mi
+      volumeMounts:
+        - name: broker-xml
+          mountPath: /var/lib/artemis-instance/etc-override/broker.xml
+          readOnly: true
+  volumes:
+    - name: broker-xml
+      hostPath:
+        path: /opt/measure/infra/artemis/broker.xml
+        type: File
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: postgres
+  labels:
+    app: measure-postgres
+spec:
+  restartPolicy: Always
+  containers:
+    - name: postgres
+      image: docker.io/library/postgres:17-alpine
+      env:
+        - name: POSTGRES_DB
+          value: case_poc
+        - name: POSTGRES_USER
+          value: postgres
+        - name: POSTGRES_PASSWORD
+          value: postgres
+      resources:
+        limits:
+          memory: 512Mi
+      volumeMounts:
+        - name: initdb
+          mountPath: /docker-entrypoint-initdb.d
+          readOnly: true
+        - name: pgdata
+          mountPath: /var/lib/postgresql/data
+  volumes:
+    - name: initdb
+      hostPath:
+        path: /opt/measure/infra/postgres/init
+        type: Directory
+    - name: pgdata
+      persistentVolumeClaim:
+        claimName: measure-pgdata
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: measure-pgdata
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: keycloak
+  labels:
+    app: measure-keycloak
+spec:
+  restartPolicy: Always
+  containers:
+    - name: keycloak
+      image: quay.io/keycloak/keycloak:26.3
+      args: ["start-dev", "--import-realm"]
+      env:
+        - name: KC_BOOTSTRAP_ADMIN_USERNAME
+          value: admin
+        - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+          value: admin
+        - name: KC_HOSTNAME
+          value: http://localhost:8180
+        - name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC
+          value: "true"
+        - name: KC_HEALTH_ENABLED
+          value: "true"
+      ports:
+        - containerPort: 8080
+          hostPort: 8180
+      resources:
+        limits:
+          memory: 1536Mi
+      volumeMounts:
+        - name: realm
+          mountPath: /opt/keycloak/data/import/case-poc-realm.json
+          readOnly: true
+  volumes:
+    - name: realm
+      hostPath:
+        path: /opt/measure/infra/keycloak/case-poc-realm.json
+        type: File

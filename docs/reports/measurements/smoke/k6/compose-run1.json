@@ -1,0 +1,13 @@
+{
+  "rate_target_rps": 10,
+  "duration": "20s",
+  "count": 201,
+  "throughput_rps": 10.030932701574212,
+  "p50_ms": 9.246,
+  "p95_ms": 35.32,
+  "p99_ms": 50.53,
+  "avg_ms": 14.628333333333336,
+  "max_ms": 81.445,
+  "error_rate": 0,
+  "dropped_iterations": 0
+}

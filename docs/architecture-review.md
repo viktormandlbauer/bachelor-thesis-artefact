@@ -5,6 +5,15 @@
 > track. Each section gives the architecture diagram, what the layer proves, an
 > assessment of the practices used (with file evidence), and the gaps. §6 is the
 > consolidated principles catalogue for further research.
+>
+> **Status update (2026-07-07):** gaps #1, #3 (in-cluster part) and #8 of §5 have since
+> been closed (marked inline): the chart deploys the full Phase-2 stack on k3s, runtime
+> credentials are bootstrap-generated in-cluster Secrets outside git (REQ-G-005), and
+> Argo CD tracks branch `phase2`. The requirements catalogue validates with 0 FAIL
+> ([reports/requirements-validation-2026-07-07.md](reports/requirements-validation-2026-07-07.md)),
+> and the SRQ3 measurement harness was added
+> ([measurement-comparison.md](measurement-comparison.md)). The review body is otherwise
+> kept as written.
 
 ---
 
@@ -22,7 +31,7 @@ The three layers were built in deliberate order, each proving one thing:
 |---|---|---|
 | Phase 1 app | One distributed trace per user action across an async AMQP hop | done, superseded by Phase 2 |
 | Phase 2 app | The same flow with durable state, reliable messaging, and OIDC — i.e. an app that *deserves* Kubernetes | done, verified in compose (see `application-architecture/phase-2-implementation-state.md`) |
-| Cluster track | A CIS-clean k3s cluster whose entire state is git-defined | done for the **Phase 1** app; Phase 2 promotion is open |
+| Cluster track | A CIS-clean k3s cluster whose entire state is git-defined | done for the **Phase 1** app; Phase 2 promotion was open *(closed 2026-07-07)* |
 
 ---
 
@@ -61,7 +70,7 @@ flowchart LR
     OTEL --> SIG["SigNoz UI"]
 ```
 
-**Key properties** (details: `docs/architecture.md`)
+**Key properties** (details: `docs/phase-1-architecture.md`)
 
 - No direct service-to-service calls; the broker is the single integration point.
   Producers are address-oriented; consumers bind durable queues via Artemis FQQN.
@@ -164,6 +173,10 @@ worth acknowledging in the thesis (all acceptable at POC scope):
 > application (chart has Artemis + the two services only — no PostgreSQL, no Keycloak;
 > images tagged `1.0.0`, Argo CD tracks branch `k8s-poc`). Promoting Phase 2 into the
 > chart is the single biggest open work item (§5.3).
+>
+> *Resolved 2026-07-07: the chart now deploys the full Phase-2 stack (services
+> `2.0.0`, PostgreSQL, Keycloak), Argo CD tracks `phase2` — see the status note at
+> the top and [k8s-poc.md](k8s-poc.md).*
 
 ```mermaid
 flowchart TB
@@ -283,7 +296,7 @@ chapters.
 | # | Principle / pattern | Used here as | Research anchor |
 |---|---|---|---|
 | 14 | Distributed tracing with W3C Trace Context | `traceparent` propagation HTTP→AMQP; one trace per user action | w3.org/TR/trace-context; OpenTelemetry spec |
-| 15 | Trace-context persistence across async boundaries | traceparent stored per outbox row, restored under `outbox.publish` span | OTel messaging semantic conventions; *worth-noting.md* links |
+| 15 | Trace-context persistence across async boundaries | traceparent stored per outbox row, restored under `outbox.publish` span | OTel messaging semantic conventions; w3.org/TR/trace-context; dash0.com/knowledge/w3c-trace-context-traceparent-tracestate |
 | 16 | Domain + semantic-convention attributes side by side | `case.id`/`conversation.id` next to `messaging.*` attributes | OTel semantic conventions (messaging) |
 | 17 | Span links for causally-related-but-separate traces | authored event links to latest prior opposite-direction event | OTel spec (links); Sigelman et al., *Dapper* |
 | 18 | Making reliability boundaries visible, not hidden | the relay hop is a deliberate span, not smoothed over | Majors et al., *Observability Engineering* |
