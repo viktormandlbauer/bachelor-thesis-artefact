@@ -209,9 +209,9 @@ docker-published ports sit behind the k3s-blocked FORWARD path):
 ```bash
 VM_IP=$(multipass exec case-poc-cp -- hostname -I | awk '{print $1}')
 # GitLab UI:  http://$VM_IP:18929   user root, password:
-multipass exec case-poc-cp -- sudo sh -c '. /opt/case-poc/infra.env && echo $GITLAB_ROOT_PASSWORD'
+multipass exec case-poc-cp -- sudo bash /repo/scripts/infra-env-value.sh GITLAB_ROOT_PASSWORD
 # Harbor UI:  http://$VM_IP:18082   user admin, password:
-multipass exec case-poc-cp -- sudo sh -c '. /opt/case-poc/infra.env && echo $HARBOR_ADMIN_PASSWORD'
+multipass exec case-poc-cp -- sudo bash /repo/scripts/infra-env-value.sh HARBOR_ADMIN_PASSWORD
 ```
 
 One-time seeding after a fresh provision (GitLab project + API token, Harbor

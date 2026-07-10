@@ -117,6 +117,43 @@
         executable: /bin/bash
       when: helm_installed.rc != 0 or helm_version not in helm_installed.stdout
 
+    # A DHCP address change across VM restarts breaks the embedded etcd's
+    # single-member cluster — the stored peer URL pins the OLD node IP and
+    # k3s loops in "activating" with "this server is not a member of the
+    # etcd cluster". Detect that loop and reset the membership in place
+    # (`k3s server --cluster-reset` keeps the data, re-registers the member
+    # under the current IP).
+    - name: Detect etcd member-IP mismatch (node IP changed across restart)
+      ansible.builtin.shell: |
+        systemctl is-active --quiet k3s || {
+          journalctl -u k3s -n 200 --no-pager 2>/dev/null \
+            | grep -q 'not a member of the etcd cluster' && echo mismatch
+        }
+        true
+      args:
+        executable: /bin/bash
+      register: etcd_membership
+      changed_when: false
+
+    - name: Reset the embedded etcd membership to the current node IP
+      ansible.builtin.shell: |
+        set -e
+        systemctl stop k3s
+        k3s server --cluster-reset
+        systemctl start k3s
+      args:
+        executable: /bin/bash
+      when: "'mismatch' in etcd_membership.stdout"
+
+    # Second half of the DHCP-change heal: the Node object's InternalIP may
+    # still pin the old address, deadlocking the netpol controller (fatal
+    # before the cloud controller can refresh the addresses). No-op unless
+    # that state is positively detected.
+    - name: Heal a stale node InternalIP (node IP changed across restart)
+      ansible.builtin.command: bash {{ repo_on_vm }}/scripts/k3s-node-ip-heal.sh
+      register: node_ip_heal
+      changed_when: "'FIXED' in node_ip_heal.stdout"
+
     - name: Restart k3s to pick up refreshed config
       ansible.builtin.systemd_service:
         name: k3s
@@ -125,10 +162,17 @@
         - k3s_installed.rc == 0
         - k3s_version in k3s_installed.stdout
         - k3s_config.changed or kubelet_sysctl.changed or k3s_registries.changed
+        - "'mismatch' not in etcd_membership.stdout"
 
+    # kubectl wait exits immediately with ServiceUnavailable while the
+    # apiserver itself is still coming up — retry through that window.
     - name: Wait for the control-plane node Ready
       ansible.builtin.command: >
         k3s kubectl wait --for=condition=Ready node/{{ ansible_hostname }} --timeout=300s
+      register: node_ready
+      retries: 12
+      delay: 10
+      until: node_ready.rc == 0
       changed_when: false
 
     # k3s creates some certificates world-readable; the CIS file-permission
@@ -184,7 +228,9 @@
     # ------------------------------------------------------------------
     - name: Install Docker Engine + Compose plugin (compose-side infra)
       ansible.builtin.apt:
-        name: [docker.io, docker-compose-v2]
+        # docker-buildx: the service Dockerfiles use BuildKit cache mounts
+        # (scripts/images-publish-vm.sh builds them on this VM).
+        name: [docker.io, docker-compose-v2, docker-buildx]
         state: present
       when: compose_infra | bool
 
@@ -412,6 +458,10 @@
   tasks:
     - name: Wait for all nodes Ready
       ansible.builtin.command: k3s kubectl wait --for=condition=Ready node --all --timeout=300s
+      register: all_ready
+      retries: 12
+      delay: 10
+      until: all_ready.rc == 0
       changed_when: false
 
     - name: Cluster info

@@ -21,7 +21,9 @@ BRANCH="${1:-$(git rev-parse --abbrev-ref HEAD)}"
 mp() { MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' multipass "$@"; }
 
 CP_IP="$(mp exec "$CP_NAME" -- hostname -I | tr -d '\r' | awk '{print $1}')"
-TOKEN="$(mp exec "$CP_NAME" -- sudo sh -c '. /opt/case-poc/infra.env && printf %s "$GITLAB_API_TOKEN"' | tr -d '\r')"
+# Read via a VM-side helper: multipass exec on Windows loses quoting on
+# multi-word `sh -c` arguments, so the sourcing must happen in a script file.
+TOKEN="$(mp exec "$CP_NAME" -- sudo bash /repo/scripts/infra-env-value.sh GITLAB_API_TOKEN | tr -d '\r')"
 [ -n "$TOKEN" ] || { echo "no GITLAB_API_TOKEN on $CP_NAME (run scripts/cp-infra-bootstrap.sh first)"; exit 1; }
 
 echo "==> Pushing $BRANCH to the internal GitLab ($CP_NAME @ $CP_IP)"
