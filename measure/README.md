@@ -9,12 +9,26 @@ management-service):
 |---|---|---|
 | `compose` | VM `case-engines` (Docker Engine) | [compose/docker-compose.yml](compose/docker-compose.yml) |
 | `podman`  | VM `case-engines` (rootful Podman) | [podman/infra.yaml](podman/infra.yaml) + [podman/app.yaml.tpl](podman/app.yaml.tpl) via `podman kube play` |
-| `k3s`     | VM `case-poc` (the hardened PoC cluster) | `deploy/helm/anonymous-case-poc` (plain Helm, namespace `measure`) |
+| `k3s`     | VM `case-poc-cp` (the hardened PoC cluster) | `deploy/helm/anonymous-case-poc` (plain Helm, namespace `measure`) |
 
 Both VMs have the identical allocation (4 vCPU / 8 GiB / 40 GiB, Ubuntu
 24.04 on Multipass), so the platform is the only variable. The 16 GiB host
 cannot run both VMs at once — the harness stops the other VM before each
 measurement, which doubles as the "no background load" control.
+
+**Parity note:** the k3s PoC is by default a multi-VM cluster (dedicated
+control plane + workers) whose control-plane VM also runs the compose-side
+infra (SigNoz, Keycloak, PostgreSQL, GitLab, Harbor). That breaks the
+identical-allocation control, so for measurements bring it up as a bare
+single node:
+
+```bash
+WORKERS=0 COMPOSE_INFRA=0 CP_CPUS=4 CP_MEMORY=8G CP_DISK=40G bash scripts/vm-up.sh
+```
+
+(With `otel.enabled=false` — the chart default used by the plain-Helm
+`measure` release — nothing references the missing collector. Stop any
+worker VMs so the app pods' worker affinity cannot pull them in.)
 
 Method, metric definitions, SRQ3 mapping, manual step counts and threats to
 validity: [docs/measurement-comparison.md](../docs/measurement-comparison.md).
@@ -79,4 +93,4 @@ quiesces it first (`vm/k3s-quiesce.sh`: application controller → 0, then
 case-poc deployments → 0) so the measured `measure` namespace release —
 installed with plain Helm exactly like `scripts/validate-requirements.sh`
 does — is the only workload. `run-all.sh` restores everything at the end;
-manually: `multipass exec case-poc -- sudo bash /repo/measure/vm/k3s-quiesce.sh restore`.
+manually: `multipass exec case-poc-cp -- sudo bash /repo/measure/vm/k3s-quiesce.sh restore`.

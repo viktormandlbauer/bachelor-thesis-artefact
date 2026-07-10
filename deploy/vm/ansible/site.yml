@@ -1,0 +1,424 @@
+---
+# Provisions the k8s POC cluster: a dedicated CIS-hardened k3s control-plane
+# node that doubles as the infra host (docker-compose SigNoz/Keycloak/Postgres,
+# and the pinned k8s infra workloads), plus k3s agent (worker) nodes.
+#
+# Runs ON the control-plane VM (the Ansible controller) — scripts/vm-up.sh
+# installs ansible there, authorizes its key on the workers, writes the
+# inventory and invokes it as:
+#
+#   multipass exec case-poc-cp -- env ANSIBLE_CONFIG=/repo/deploy/vm/ansible/ansible.cfg \
+#     ansible-playbook -i /repo/deploy/vm/ansible/inventory.ini /repo/deploy/vm/ansible/site.yml
+#
+# The control-plane host connects locally (ansible_connection=local); workers
+# over SSH. Idempotent: re-running refreshes config files, restarts k3s(-agent)
+# if needed, and re-points agents at the current server IP.
+# Uninstall with /usr/local/bin/k3s-uninstall.sh / k3s-agent-uninstall.sh.
+
+- name: CIS-hardened k3s server (dedicated control plane + infra host)
+  hosts: control_plane
+  become: true
+  vars:
+    k3s_version: v1.36.2+k3s1
+    helm_version: v3.19.0
+    helm_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+    # Config files are copied from the repo mounted at /repo by
+    # scripts/vm-up.sh (the controller runs on this very node).
+    k3s_cfg_src: /repo/deploy/cluster/k3s
+    repo_on_vm: /repo
+    # Compose-side infra on this node (SigNoz monitoring, Keycloak, Postgres,
+    # GitLab, Harbor); scripts/vm-up.sh passes -e compose_infra=false to skip
+    # (measure/ parity).
+    compose_infra: true
+    # VM-local credentials for the compose infra (GitLab root/API token,
+    # Harbor admin) — generated once at provision time, never in git.
+    infra_env_file: /opt/case-poc/infra.env
+    harbor_version: v2.13.1
+    # Containerd pulls harbor.case-poc.local/... through the host-network
+    # bridge on this node (infra/cp-bridges.compose.yaml).
+    harbor_mirror_ip: "{{ ansible_default_ipv4.address }}"
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  tasks:
+    - name: Install prerequisites (jq/git are needed by kube-bench audits and kustomize)
+      ansible.builtin.apt:
+        name: [curl, jq, git]
+        state: present
+        update_cache: true
+
+    - name: Apply kubelet kernel parameters (protect-kernel-defaults)
+      ansible.builtin.copy:
+        src: "{{ k3s_cfg_src }}/90-kubelet-sysctl.conf"
+        dest: /etc/sysctl.d/90-kubelet.conf
+        mode: "0644"
+      register: kubelet_sysctl
+
+    - name: Reload sysctls
+      ansible.builtin.command: sysctl --system
+      when: kubelet_sysctl.changed
+
+    - name: Create k3s config directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - /etc/rancher/k3s
+        - /var/lib/rancher/k3s/server/logs
+
+    - name: Install k3s config files (CIS hardening)
+      ansible.builtin.copy:
+        src: "{{ k3s_cfg_src }}/{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: "0600"
+      loop:
+        - { src: config.yaml, dest: /etc/rancher/k3s/config.yaml }
+        - { src: admission-config.yaml, dest: /var/lib/rancher/k3s/server/admission-config.yaml }
+        - { src: audit-policy.yaml, dest: /var/lib/rancher/k3s/server/audit-policy.yaml }
+      register: k3s_config
+
+    - name: Install containerd registry mirror (Harbor on this node)
+      ansible.builtin.template:
+        src: templates/k3s-registries.yaml.j2
+        dest: /etc/rancher/k3s/registries.yaml
+        mode: "0600"
+      register: k3s_registries
+
+    - name: Check installed k3s version
+      ansible.builtin.command: k3s --version
+      register: k3s_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Install k3s {{ k3s_version }} (server)
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} sh -s - server
+      args:
+        executable: /bin/bash
+      when: k3s_installed.rc != 0 or k3s_version not in k3s_installed.stdout
+
+    # Helm on the node: lifecycle operations stay standard-CLI-only
+    # (REQ-F-009) and scripts/validate-requirements.sh exercises the
+    # install/upgrade/rollback acceptance criteria with plain helm.
+    - name: Check installed helm version
+      ansible.builtin.command: helm version --short
+      register: helm_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Install helm {{ helm_version }}
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -sfL "https://get.helm.sh/helm-{{ helm_version }}-linux-{{ helm_arch }}.tar.gz" | tar -xz -C /tmp
+        install -m 0755 "/tmp/linux-{{ helm_arch }}/helm" /usr/local/bin/helm
+        rm -rf "/tmp/linux-{{ helm_arch }}"
+      args:
+        executable: /bin/bash
+      when: helm_installed.rc != 0 or helm_version not in helm_installed.stdout
+
+    - name: Restart k3s to pick up refreshed config
+      ansible.builtin.systemd_service:
+        name: k3s
+        state: restarted
+      when:
+        - k3s_installed.rc == 0
+        - k3s_version in k3s_installed.stdout
+        - k3s_config.changed or kubelet_sysctl.changed or k3s_registries.changed
+
+    - name: Wait for the control-plane node Ready
+      ansible.builtin.command: >
+        k3s kubectl wait --for=condition=Ready node/{{ ansible_hostname }} --timeout=300s
+      changed_when: false
+
+    # k3s creates some certificates world-readable; the CIS file-permission
+    # checks (1.1.x / 4.1.x) expect 600. k3s preserves permissions of existing
+    # files across restarts.
+    - name: Post-install file hardening (CIS 1.1.x / 4.1.x file permissions)
+      ansible.builtin.shell: |
+        find /var/lib/rancher/k3s -type f \( -name '*.crt' -o -name '*.key' -o -name '*.kubeconfig' \) -exec chmod 600 {} +
+        chmod 600 /etc/rancher/k3s/k3s.yaml
+        find /var/lib/rancher/k3s/agent/etc/cni -type f -exec chmod 600 {} + 2>/dev/null || true
+      changed_when: false
+
+    # Every namespace except kube-system must have automountServiceAccountToken:
+    # false on its default ServiceAccount. Namespaces created later via GitOps
+    # carry their own hardened default SA in the manifests. On a fresh cluster
+    # the default SAs are created asynchronously shortly after boot, so each
+    # one must be waited for — patching too early was silently skipped before.
+    - name: Harden default service accounts (CIS 5.1.5)
+      ansible.builtin.shell: |
+        set -e
+        for ns in $(k3s kubectl get ns -o jsonpath='{.items[*].metadata.name}'); do
+          [ "$ns" = "kube-system" ] && continue
+          k3s kubectl -n "$ns" wait --for=create serviceaccount/default --timeout=120s >/dev/null
+          k3s kubectl -n "$ns" patch serviceaccount default \
+            -p '{"automountServiceAccountToken": false}'
+        done
+      changed_when: false
+
+    # "node Ready" does not mean the bundled addons exist yet: on first boot
+    # the helm controller is still creating traefik & friends, and the
+    # hardening script patches their ServiceAccounts/Deployments by name.
+    - name: Wait for k3s-bundled kube-system workloads to be created
+      ansible.builtin.shell: |
+        set -e
+        for sa in coredns metrics-server local-path-provisioner-service-account svclb traefik helm-traefik helm-traefik-crd; do
+          k3s kubectl -n kube-system wait --for=create "serviceaccount/$sa" --timeout=300s
+        done
+        for d in coredns metrics-server local-path-provisioner traefik; do
+          k3s kubectl -n kube-system wait --for=create "deployment/$d" --timeout=300s
+        done
+      changed_when: false
+
+    - name: Harden k3s-bundled kube-system workloads (CIS 5.1.6)
+      ansible.builtin.command: bash {{ repo_on_vm }}/scripts/harden-kube-system.sh
+      changed_when: false
+
+    # ------------------------------------------------------------------
+    # Compose-side infra on the control-plane VM: the SigNoz observability
+    # stack (also the OTLP backend for the k8s workloads, published into the
+    # cluster by scripts/argocd-install.sh) and the compose Keycloak +
+    # PostgreSQL from the Phase-2 stack. Persistence = named docker volumes
+    # on this VM. The app services themselves are NOT started here.
+    # ------------------------------------------------------------------
+    - name: Install Docker Engine + Compose plugin (compose-side infra)
+      ansible.builtin.apt:
+        name: [docker.io, docker-compose-v2]
+        state: present
+      when: compose_infra | bool
+
+    - name: Allow the ubuntu user to run docker (day-2 convenience)
+      ansible.builtin.user:
+        name: ubuntu
+        groups: docker
+        append: true
+      when: compose_infra | bool
+
+    # `docker compose up -d` reconciles itself (recreates only what changed),
+    # so change reporting is left off. SigNoz first: it owns the external
+    # signoz-net network the app compose file declares.
+    - name: Start the SigNoz observability stack (compose)
+      ansible.builtin.command: >
+        docker compose -f {{ repo_on_vm }}/infra/signoz/docker-compose.yaml up -d --quiet-pull
+      changed_when: false
+      when: compose_infra | bool
+
+    - name: Start compose-side PostgreSQL + Keycloak
+      ansible.builtin.command: >
+        docker compose -f {{ repo_on_vm }}/infra/docker-compose.yml up -d --quiet-pull postgres keycloak
+      changed_when: false
+      when: compose_infra | bool
+
+    # VM-local credentials for GitLab/Harbor (REQ-G-005: generated at
+    # provision time, never in git). The GitLab API token is pre-generated
+    # here because scripts/cp-infra-bootstrap.sh has to seed it into GitLab
+    # verbatim (PAT prefix glpat- is required by the token format check).
+    - name: Generate the compose-infra credentials file
+      ansible.builtin.shell: |
+        umask 077
+        mkdir -p {{ infra_env_file | dirname }}
+        cat > {{ infra_env_file }} <<EOF
+        GITLAB_ROOT_PASSWORD=$(openssl rand -hex 16)
+        GITLAB_API_TOKEN=glpat-$(openssl rand -hex 12)
+        HARBOR_ADMIN_PASSWORD=$(openssl rand -hex 12)
+        EOF
+      args:
+        creates: "{{ infra_env_file }}"
+      when: compose_infra | bool
+
+    # Host-network relays so cluster pods (and containerd on every node) can
+    # reach the compose infra: a docker-published port is NOT reachable via
+    # the node IP once k3s owns the FORWARD path — see
+    # infra/cp-bridges.compose.yaml for the full port map. The selector-less
+    # Services/EndpointSlices that front them in the cluster are created by
+    # scripts/argocd-install.sh.
+    - name: Remove the legacy single-purpose OTLP bridge container
+      ansible.builtin.command: docker rm -f signoz-otlp-bridge
+      register: legacy_bridge
+      changed_when: "'signoz-otlp-bridge' in legacy_bridge.stdout"
+      failed_when: false
+      when: compose_infra | bool
+
+    - name: Start the control-plane bridges (host-network socat relays)
+      ansible.builtin.command: >
+        docker compose -f {{ repo_on_vm }}/infra/cp-bridges.compose.yaml up -d --quiet-pull
+      changed_when: false
+      when: compose_infra | bool
+
+    # Internal GitLab (GitOps source for Argo CD) and Harbor (image registry):
+    # the cluster consumes git and images from infrastructure this VM hosts,
+    # not from GitHub/Docker Hub. Project/repo seeding is a separate step
+    # (scripts/cp-infra-bootstrap.sh) because GitLab needs minutes to boot.
+    - name: Start the internal GitLab (compose)
+      ansible.builtin.command: >
+        docker compose --env-file {{ infra_env_file }}
+        -f {{ repo_on_vm }}/infra/gitlab/docker-compose.yaml up -d --quiet-pull
+      changed_when: false
+      when: compose_infra | bool
+
+    - name: Download the Harbor online installer
+      ansible.builtin.get_url:
+        url: "https://github.com/goharbor/harbor/releases/download/{{ harbor_version }}/harbor-online-installer-{{ harbor_version }}.tgz"
+        dest: /opt/harbor-online-installer-{{ harbor_version }}.tgz
+        mode: "0644"
+      when: compose_infra | bool
+
+    - name: Unpack the Harbor installer
+      ansible.builtin.unarchive:
+        src: /opt/harbor-online-installer-{{ harbor_version }}.tgz
+        dest: /opt
+        remote_src: true
+        creates: /opt/harbor/install.sh
+      when: compose_infra | bool
+
+    # harbor.yml is rendered from the shipped template: http-only on :8082
+    # (loopback pushes from this VM), external_url on the bridge port :18082
+    # so the token-service realm Harbor hands out in the auth handshake is
+    # reachable from every node's containerd.
+    - name: Render harbor.yml
+      ansible.builtin.shell: |
+        set -e
+        set -a; . {{ infra_env_file }}; set +a
+        python3 - <<'PY' > /tmp/harbor.yml.rendered
+        import os, sys, yaml
+        with open('/opt/harbor/harbor.yml.tmpl') as f:
+            cfg = yaml.safe_load(f)
+        cfg['hostname'] = '{{ harbor_mirror_ip }}'
+        cfg['http']['port'] = 8082
+        cfg.pop('https', None)
+        cfg['external_url'] = 'http://{{ harbor_mirror_ip }}:18082'
+        cfg['harbor_admin_password'] = os.environ['HARBOR_ADMIN_PASSWORD']
+        cfg['data_volume'] = '/opt/harbor-data'
+        yaml.safe_dump(cfg, sys.stdout, default_flow_style=False)
+        PY
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: compose_infra | bool
+
+    - name: Install rendered harbor.yml
+      ansible.builtin.copy:
+        src: /tmp/harbor.yml.rendered
+        dest: /opt/harbor/harbor.yml
+        remote_src: true
+        mode: "0600"
+      register: harbor_cfg
+      when: compose_infra | bool
+
+    - name: Run the Harbor installer (first install or config change)
+      ansible.builtin.command: bash /opt/harbor/install.sh
+      args:
+        chdir: /opt/harbor
+      when: compose_infra | bool and harbor_cfg.changed
+
+    - name: Ensure Harbor is running
+      ansible.builtin.command: docker compose -f /opt/harbor/docker-compose.yml up -d
+      changed_when: false
+      when: compose_infra | bool and not harbor_cfg.changed
+
+- name: CIS-hardened k3s agents (workers)
+  hosts: workers
+  become: true
+  vars:
+    k3s_version: v1.36.2+k3s1
+    k3s_cfg_src: /repo/deploy/cluster/k3s
+    control_plane_host: "{{ groups['control_plane'][0] }}"
+    k3s_server_url: "https://{{ hostvars[control_plane_host].ansible_default_ipv4.address }}:6443"
+    harbor_mirror_ip: "{{ hostvars[control_plane_host].ansible_default_ipv4.address }}"
+  tasks:
+    - name: Install prerequisites
+      ansible.builtin.apt:
+        name: [curl]
+        state: present
+        update_cache: true
+
+    - name: Apply kubelet kernel parameters (protect-kernel-defaults)
+      ansible.builtin.copy:
+        src: "{{ k3s_cfg_src }}/90-kubelet-sysctl.conf"
+        dest: /etc/sysctl.d/90-kubelet.conf
+        mode: "0644"
+      register: kubelet_sysctl
+
+    - name: Reload sysctls
+      ansible.builtin.command: sysctl --system
+      when: kubelet_sysctl.changed
+
+    - name: Create k3s config directory
+      ansible.builtin.file:
+        path: /etc/rancher/k3s
+        state: directory
+        mode: "0755"
+
+    - name: Read the k3s join token from the control plane
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      delegate_to: "{{ control_plane_host }}"
+      register: node_token
+
+    # server URL + join token live in the agent config (0600, root-only)
+    # rather than the installer's systemd env file, so a changed control-plane
+    # IP is fixed by re-running this playbook (template + restart).
+    - name: Install k3s agent config (CIS hardening + join parameters)
+      ansible.builtin.template:
+        src: templates/k3s-agent-config.yaml.j2
+        dest: /etc/rancher/k3s/config.yaml
+        mode: "0600"
+      register: agent_config
+
+    - name: Install containerd registry mirror (Harbor on the control plane)
+      ansible.builtin.template:
+        src: templates/k3s-registries.yaml.j2
+        dest: /etc/rancher/k3s/registries.yaml
+        mode: "0600"
+      register: k3s_registries
+
+    - name: Check installed k3s version
+      ansible.builtin.command: k3s --version
+      register: k3s_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Install k3s {{ k3s_version }} (agent)
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} sh -s - agent
+      args:
+        executable: /bin/bash
+      when: k3s_installed.rc != 0 or k3s_version not in k3s_installed.stdout
+
+    - name: Restart k3s-agent to pick up refreshed config
+      ansible.builtin.systemd_service:
+        name: k3s-agent
+        state: restarted
+      when:
+        - k3s_installed.rc == 0
+        - k3s_version in k3s_installed.stdout
+        - agent_config.changed or kubelet_sysctl.changed or k3s_registries.changed
+
+    # Same CIS 4.1.x file-permission sweep as on the server, scoped to the
+    # agent subtree (kubelet kubeconfig, client certs, CNI files).
+    - name: Post-install file hardening (CIS 4.1.x file permissions)
+      ansible.builtin.shell: |
+        find /var/lib/rancher/k3s -type f \( -name '*.crt' -o -name '*.key' -o -name '*.kubeconfig' \) -exec chmod 600 {} +
+        find /var/lib/rancher/k3s/agent/etc/cni -type f -exec chmod 600 {} + 2>/dev/null || true
+      changed_when: false
+
+- name: Cluster verification
+  hosts: control_plane
+  become: true
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  tasks:
+    - name: Wait for all nodes Ready
+      ansible.builtin.command: k3s kubectl wait --for=condition=Ready node --all --timeout=300s
+      changed_when: false
+
+    - name: Cluster info
+      ansible.builtin.command: k3s kubectl get node -o wide
+      register: node_info
+      changed_when: false
+
+    - name: Show nodes
+      ansible.builtin.debug:
+        msg: "{{ node_info.stdout_lines }}"

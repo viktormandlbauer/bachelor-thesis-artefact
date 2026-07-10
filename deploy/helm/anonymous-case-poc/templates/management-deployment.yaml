@@ -17,11 +17,12 @@ spec:
         {{- include "case-poc.selectorLabels" (dict "root" . "component" "management-service") | nindent 8 }}
     spec:
       automountServiceAccountToken: false
+      {{- include "case-poc.servicesNodeAffinity" . | nindent 6 }}
       securityContext:
         {{- include "case-poc.podSecurityContext" (dict "uid" .Values.services.runAsUser) | nindent 8 }}
       containers:
         - name: management-service
-          image: "{{ .Values.images.management.repository }}:{{ .Values.images.management.tag }}"
+          image: {{ include "case-poc.image" (dict "root" . "img" .Values.images.management) | quote }}
           imagePullPolicy: {{ .Values.images.pullPolicy }}
           securityContext:
             {{- include "case-poc.containerSecurityContext" . | nindent 12 }}
@@ -57,8 +58,10 @@ spec:
             # when this pod starts.
             - name: QUARKUS_OIDC_AUTH_SERVER_URL
               value: http://{{ include "case-poc.fullname" . }}-keycloak:8080/realms/case-poc
+            # keycloak.tokenIssuer overrides for the external (compose)
+            # Keycloak, whose KC_HOSTNAME differs from the ingress host.
             - name: QUARKUS_OIDC_TOKEN_ISSUER
-              value: http://{{ .Values.ingress.keycloakHost }}/realms/case-poc
+              value: {{ .Values.keycloak.tokenIssuer | default (printf "http://%s/realms/case-poc" .Values.ingress.keycloakHost) }}
             - name: QUARKUS_OIDC_CONNECTION_DELAY
               value: 120S
             {{- if .Values.otel.enabled }}

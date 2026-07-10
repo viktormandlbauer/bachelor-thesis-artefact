@@ -1,3 +1,4 @@
+{{- if .Values.postgres.enabled }}
 # First-boot provisioning via the official image's /docker-entrypoint-initdb.d
 # mechanism. Mirrors infra/postgres/init/01-schemas-users.sql (the compose
 # variant), but takes the per-service passwords from the environment — i.e.
@@ -11,3 +12,4 @@ metadata:
 data:
   01-schemas-users.sh: |
 {{ .Files.Get "files/postgres-init.sh" | indent 4 }}
+{{- end }}

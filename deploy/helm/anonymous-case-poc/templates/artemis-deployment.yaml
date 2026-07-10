@@ -22,6 +22,11 @@ spec:
         checksum/broker-config: {{ .Files.Get "files/broker.xml" | sha256sum }}
     spec:
       automountServiceAccountToken: false
+      {{- if .Values.scheduling.artemisWithServices }}
+      {{- include "case-poc.servicesNodeAffinity" . | nindent 6 }}
+      {{- else }}
+      {{- include "case-poc.infraNodeSelector" . | nindent 6 }}
+      {{- end }}
       securityContext:
         {{- include "case-poc.podSecurityContext" (dict "uid" .Values.artemis.runAsUser) | nindent 8 }}
         runAsGroup: {{ .Values.artemis.runAsGroup }}

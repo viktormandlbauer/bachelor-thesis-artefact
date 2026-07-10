@@ -37,3 +37,43 @@ allowPrivilegeEscalation: false
 capabilities:
   drop: ["ALL"]
 {{- end -}}
+
+{{/*
+Service image reference, optionally prefixed with the internal registry
+(values.yaml images.registry); call with (dict "root" . "img" .Values.images.<svc>)
+*/}}
+{{- define "case-poc.image" -}}
+{{- with .root.Values.images.registry -}}{{ . }}/{{ end -}}
+{{ .img.repository }}:{{ .img.tag }}
+{{- end -}}
+
+{{/*
+Node pinning for the stateful infra components (Artemis, PostgreSQL,
+Keycloak): they run on the dedicated control-plane node, where their
+local-path PVs live (values.yaml `scheduling.infraNodeSelector`).
+*/}}
+{{- define "case-poc.infraNodeSelector" -}}
+{{- with .Values.scheduling.infraNodeSelector }}
+nodeSelector:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Soft preference of the stateless app services for worker nodes (label
+case-poc/role=worker, set by the k3s agent config). Preferred — not
+required — so a single-node cluster (WORKERS=0) still schedules them.
+*/}}
+{{- define "case-poc.servicesNodeAffinity" -}}
+{{- if .Values.scheduling.servicesPreferWorkers }}
+affinity:
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        preference:
+          matchExpressions:
+            - key: case-poc/role
+              operator: In
+              values: [worker]
+{{- end }}
+{{- end -}}

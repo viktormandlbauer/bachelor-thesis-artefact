@@ -12,10 +12,11 @@ set -euo pipefail
 SUBMISSION_HOST="${SUBMISSION_HOST:-submission.localtest.me}"
 MANAGEMENT_HOST="${MANAGEMENT_HOST:-management.localtest.me}"
 KEYCLOAK_HOST="${KEYCLOAK_HOST:-keycloak.localtest.me}"
-# Pin the ingress IP (the multipass VM) instead of trusting DNS: localtest.me
-# resolves to 127.0.0.1, not to the VM — and DNS-rebind protection on many
-# routers refuses such answers anyway.
-VM_NAME="${VM_NAME:-case-poc}"
+# Pin the ingress IP instead of trusting DNS: localtest.me resolves to
+# 127.0.0.1, not to the VM — and DNS-rebind protection on many routers
+# refuses such answers anyway. Traefik's svclb listens on every node, so the
+# control-plane VM IP serves as the ingress IP.
+VM_NAME="${VM_NAME:-case-poc-cp}"
 INGRESS_IP="${INGRESS_IP:-$(multipass exec "$VM_NAME" -- hostname -I | tr -d '\r' | awk '{print $1}')}"
 
 SUBMISSION_URL="http://$SUBMISSION_HOST"

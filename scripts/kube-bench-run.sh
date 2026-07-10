@@ -6,10 +6,16 @@
 # kube-bench runs directly on the node (not as a pod): the k3s-cis-1.9 profile
 # audits systemd journal entries (journalctl -u k3s) and files under
 # /var/lib/rancher, which are only reliably reachable from the node. Run it
-# inside the multipass VM (the repo is mounted at /repo by scripts/vm-up.sh;
+# inside a cluster VM (the repo is mounted at /repo by scripts/vm-up.sh;
 # the report lands in docs/reports/ on the host through the mount):
 #
-#   multipass exec case-poc -- sudo bash /repo/scripts/kube-bench-run.sh
+#   multipass exec case-poc-cp -- sudo bash /repo/scripts/kube-bench-run.sh
+#
+# The control-plane run (all targets, incl. the node checks for its own
+# kubelet) is the acceptance evidence. On a worker the script audits the
+# node target only, best-effort: the k3s profile addresses the journal unit
+# 'k3s', while agents log under 'k3s-agent' — the workers get the identical
+# kubelet hardening from the same playbook either way.
 #
 # Pass criterion: 0 checks in state FAIL. (WARN entries are the profile's
 # "manual verification" items; see docs/k8s-poc.md for their disposition.)
@@ -17,6 +23,14 @@ set -euo pipefail
 
 KUBE_BENCH_VERSION="0.15.6"
 BENCHMARK="k3s-cis-1.9"
+
+if [ -f /etc/systemd/system/k3s.service ]; then
+  ROLE=server TARGETS="master,etcd,controlplane,node,policies"
+elif [ -f /etc/systemd/system/k3s-agent.service ]; then
+  ROLE=agent TARGETS="node"
+else
+  echo "neither k3s.service nor k3s-agent.service found on this node" >&2; exit 1
+fi
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALL_DIR="/opt/kube-bench"
@@ -34,17 +48,21 @@ if [ ! -x "$INSTALL_DIR/kube-bench" ] || ! "$INSTALL_DIR/kube-bench" version | g
     | tar -xz -C "$INSTALL_DIR"
 fi
 
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 mkdir -p "$REPORT_DIR"
 STAMP="$(date +%Y-%m-%d)"
-REPORT="$REPORT_DIR/kube-bench-$STAMP.txt"
+if [ "$ROLE" = server ]; then
+  export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+  REPORT="$REPORT_DIR/kube-bench-$STAMP.txt"
+else
+  REPORT="$REPORT_DIR/kube-bench-$STAMP-$(hostname).txt"
+fi
 
-echo "==> Running kube-bench --benchmark $BENCHMARK"
+echo "==> Running kube-bench --benchmark $BENCHMARK ($ROLE: targets $TARGETS)"
 cd "$INSTALL_DIR"
 ./kube-bench run \
   --config-dir "$INSTALL_DIR/cfg" \
   --benchmark "$BENCHMARK" \
-  --targets master,etcd,controlplane,node,policies \
+  --targets "$TARGETS" \
   | tee "$REPORT"
 
 echo

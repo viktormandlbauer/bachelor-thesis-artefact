@@ -1,3 +1,4 @@
+{{- if .Values.postgres.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,6 +24,7 @@ spec:
         checksum/init-script: {{ .Files.Get "files/postgres-init.sh" | sha256sum }}
     spec:
       automountServiceAccountToken: false
+      {{- include "case-poc.infraNodeSelector" . | nindent 6 }}
       securityContext:
         {{- include "case-poc.podSecurityContext" (dict "uid" .Values.postgres.runAsUser) | nindent 8 }}
         runAsGroup: {{ .Values.postgres.runAsGroup }}
@@ -82,3 +84,4 @@ spec:
         - name: init
           configMap:
             name: {{ include "case-poc.fullname" . }}-postgres-init
+{{- end }}

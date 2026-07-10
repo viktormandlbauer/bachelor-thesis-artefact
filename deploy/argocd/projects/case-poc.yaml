@@ -1,6 +1,8 @@
-# GitOps guardrails for the POC: only this repository as source, only the two
-# namespaces the namespace-scoped Argo CD is allowed to touch, and no
-# cluster-scoped resources at all.
+# GitOps guardrails for the POC: only the internal GitLab repository as
+# source (the `gitlab` Service in the argocd namespace fronts the GitLab on
+# the control-plane VM — runtime EndpointSlice created by
+# scripts/argocd-install.sh), only the two namespaces the namespace-scoped
+# Argo CD is allowed to touch, and no cluster-scoped resources at all.
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
@@ -9,7 +11,7 @@ metadata:
 spec:
   description: Anonymous-case POC (bachelor thesis artefact)
   sourceRepos:
-    - https://github.com/viktormandlbauer/bachelor-thesis-artefact.git
+    - http://gitlab.argocd.svc.cluster.local/root/bachelor-thesis-artefact.git
   destinations:
     - server: https://kubernetes.default.svc
       namespace: argocd

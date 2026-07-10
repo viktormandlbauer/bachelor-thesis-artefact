@@ -1,8 +1,17 @@
-# The Phase-2 microservice application (services + Artemis + PostgreSQL +
-# Keycloak), rendered from the in-repo Helm chart. Image tags/values are
-# versioned in the chart's values.yaml; changing them in git is the
-# deployment mechanism. Runtime credentials are NOT synced from git — they
-# are pre-created Secrets (scripts/secrets-bootstrap.sh, REQ-G-005).
+# The Phase-2 application stack (submission + management + Artemis), rendered
+# from the in-repo Helm chart and synced from the INTERNAL GitLab. In this
+# environment the supporting infra — monitoring (SigNoz), Keycloak,
+# PostgreSQL, GitLab, Harbor — runs as docker compose on the control-plane
+# VM, so ONLY the application stack lands on the cluster (worker nodes):
+# that keeps the k3s variant comparable with the compose/podman variants,
+# where the same VM-level infra serves an identical three-container app
+# stack (docs/measurement-comparison.md).
+#
+# The chart's external endpoints (selector-less Services -> control-plane
+# bridges) are wired at bootstrap by scripts/argocd-install.sh; runtime
+# credentials are pre-created Secrets (scripts/secrets-bootstrap.sh,
+# REQ-G-005). Image tags/values are versioned here; changing them in git is
+# the deployment mechanism.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -11,11 +20,37 @@ metadata:
 spec:
   project: case-poc
   source:
-    repoURL: https://github.com/viktormandlbauer/bachelor-thesis-artefact.git
+    repoURL: http://gitlab.argocd.svc.cluster.local/root/bachelor-thesis-artefact.git
     targetRevision: phase2
     path: deploy/helm/anonymous-case-poc
     helm:
       releaseName: case-poc
+      parameters:
+        # Images come from the internal Harbor (containerd mirror in
+        # /etc/rancher/k3s/registries.yaml; pushed by scripts/images-publish.sh).
+        - name: images.registry
+          value: harbor.case-poc.local
+        # PostgreSQL + Keycloak run as compose on the control-plane VM; the
+        # chart renders their Services selector-less (EndpointSlices from
+        # scripts/argocd-install.sh). Chart defaults stay in-cluster so the
+        # plain-helm installs (measure/, validation) remain self-contained.
+        - name: postgres.enabled
+          value: "false"
+        - name: keycloak.enabled
+          value: "false"
+        # The compose Keycloak stamps its fixed KC_HOSTNAME issuer
+        # (infra/docker-compose.yml) into every token.
+        - name: keycloak.tokenIssuer
+          value: http://localhost:8180/realms/case-poc
+        # With postgres/keycloak external, Artemis is part of the measured
+        # app stack and joins the services on the worker nodes.
+        - name: scheduling.artemisWithServices
+          value: "true"
+        # SigNoz on the control-plane VM, published into the namespace as
+        # the `signoz-collector` Service by scripts/argocd-install.sh. The
+        # chart default stays off for plain-helm installs.
+        - name: otel.enabled
+          value: "true"
   destination:
     server: https://kubernetes.default.svc
     namespace: case-poc

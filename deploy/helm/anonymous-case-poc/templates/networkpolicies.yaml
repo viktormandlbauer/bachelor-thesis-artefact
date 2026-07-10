@@ -90,6 +90,7 @@ spec:
         - port: 5672
         - port: 8161
         - port: 61616
+{{- if .Values.postgres.enabled }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -111,6 +112,8 @@ spec:
                 values: [submission-service, management-service]
       ports:
         - port: 5432
+{{- end }}
+{{- if .Values.keycloak.enabled }}
 ---
 # Keycloak: token/console traffic through Traefik, plus the OIDC backchannel
 # (discovery + JWKS) from management-service.
@@ -135,6 +138,7 @@ spec:
               app.kubernetes.io/name: management-service
       ports:
         - port: 8080
+{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -154,12 +158,25 @@ spec:
               app.kubernetes.io/name: artemis
       ports:
         - port: 5672
+    {{- if .Values.postgres.enabled }}
     - to:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: postgres
       ports:
         - port: 5432
+    {{- else }}
+    # External PostgreSQL on the control-plane VM (selector-less Service ->
+    # node-IP bridge): the post-DNAT destination lies outside the pod CIDR
+    # and cannot be matched by a podSelector, so the rule is port-scoped —
+    # like the OTLP rule below. Both the Service port and the bridge target
+    # port are allowed (kube-router sees the post-DNAT port).
+    - ports:
+        - port: 5432
+          protocol: TCP
+        - port: {{ .Values.postgres.externalPort }}
+          protocol: TCP
+    {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -179,16 +196,65 @@ spec:
               app.kubernetes.io/name: artemis
       ports:
         - port: 5672
+    {{- if .Values.postgres.enabled }}
     - to:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: postgres
       ports:
         - port: 5432
+    {{- else }}
+    # Port-scoped: external PostgreSQL via node-IP bridge (see the matching
+    # rule on the submission egress policy).
+    - ports:
+        - port: 5432
+          protocol: TCP
+        - port: {{ .Values.postgres.externalPort }}
+          protocol: TCP
+    {{- end }}
+    {{- if .Values.keycloak.enabled }}
     - to:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: keycloak
       ports:
         - port: 8080
+    {{- else }}
+    # Port-scoped: external Keycloak (OIDC backchannel) via node-IP bridge.
+    - ports:
+        - port: 8080
+          protocol: TCP
+        - port: {{ .Values.keycloak.externalPort }}
+          protocol: TCP
+    {{- end }}
+{{- if .Values.otel.enabled }}
+---
+# OTLP trace export to the SigNoz collector on the control-plane VM. The
+# `signoz-collector` Service has no selector — its EndpointSlice (created at
+# bootstrap by scripts/argocd-install.sh) points at the node IP, so after
+# kube-proxy DNAT the destination lies outside the pod CIDR and cannot be
+# matched by a podSelector; the rule is therefore port-scoped only. Both ports
+# are allowed: 4317 (the Service port the pod dials) and 14317 (the node-IP
+# host-network bridge the Service targets — the kube-router FORWARD hook sees
+# the post-DNAT destination port).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "case-poc.fullname" . }}-allow-otlp-egress
+  labels:
+    {{- include "case-poc.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [submission-service, management-service]
+  policyTypes: ["Egress"]
+  egress:
+    - ports:
+        - port: 4317
+          protocol: TCP
+        - port: 14317
+          protocol: TCP
+{{- end }}
 {{- end }}

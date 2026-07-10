@@ -12,7 +12,10 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MEASURE_DIR="$REPO_DIR/measure"
 
 ENGINES_VM="${ENGINES_VM:-case-engines}"
-K3S_VM="${K3S_VM:-case-poc}"
+# The k3s control-plane VM. For protocol-conformant runs bring it up as a
+# single node without the compose-side infra (parity with case-engines):
+#   WORKERS=0 COMPOSE_INFRA=0 bash scripts/vm-up.sh
+K3S_VM="${K3S_VM:-case-poc-cp}"
 
 # One results dir per campaign; override RUN_ID to append to an existing one.
 RUN_ID="${RUN_ID:-$(date -u +%Y-%m-%d)}"

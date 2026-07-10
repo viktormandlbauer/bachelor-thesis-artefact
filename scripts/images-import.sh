@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
 # Builds both service images with Docker on the host and imports them into
-# the multipass VM's k3s containerd (no registry involved - the chart pins
-# the tags with imagePullPolicy: IfNotPresent).
+# the k3s containerd of EVERY cluster VM — the control plane and all workers
+# (no registry involved - the chart pins the tags with imagePullPolicy:
+# IfNotPresent, and the services may schedule on any node).
 #
 # Run on the host (macOS terminal or Git Bash on Windows; Docker running):
 #
@@ -10,26 +11,40 @@
 set -euo pipefail
 
 TAG="${1:-2.0.0}"
-VM_NAME="${VM_NAME:-case-poc}"
+CP_NAME="${CP_NAME:-case-poc-cp}"
+WORKER_PREFIX="${WORKER_PREFIX:-case-poc-w}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # Git Bash rewrites arguments that look like POSIX paths before they reach the
-# native multipass.exe; VM-side paths (/tmp/...) must stay untouched, while
-# host-side paths must be converted explicitly (host_path).
+# native multipass.exe; VM-side paths (/tmp/...) must stay untouched. The
+# host-side tar is transferred from its directory as a bare filename: multipass
+# parses anything before a colon as an instance name, so Windows drive-letter
+# paths (C:/...) are rejected.
 mp() { MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' multipass "$@"; }
-host_path() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
+
+# Control plane + every running worker VM (case-poc-w1, ...).
+VMS="${VMS:-$(mp list --format csv | tr -d '\r' \
+  | awk -F, -v cp="$CP_NAME" -v wp="$WORKER_PREFIX" \
+      'NR>1 && $2=="Running" && ($1==cp || index($1,wp)==1) {print $1}')}"
+[ -n "$VMS" ] || { echo "no running cluster VMs found (expected $CP_NAME / $WORKER_PREFIX*)"; exit 1; }
+echo "==> Importing into: $(echo $VMS | tr '\n' ' ')"
 
 for svc in submission-service management-service; do
   echo "==> Building case-poc/$svc:$TAG"
   docker build -t "case-poc/$svc:$TAG" "$REPO_DIR/$svc"
   echo "==> Exporting and importing into k3s containerd"
   docker save -o "$TMP/$svc.tar" "case-poc/$svc:$TAG"
-  mp transfer "$(host_path "$TMP/$svc.tar")" "$VM_NAME:/tmp/$svc.tar"
-  mp exec "$VM_NAME" -- sudo k3s ctr images import "/tmp/$svc.tar"
-  mp exec "$VM_NAME" -- rm -f "/tmp/$svc.tar"
+  for vm in $VMS; do
+    (cd "$TMP" && mp transfer "$svc.tar" "$vm:/tmp/$svc.tar")
+    mp exec "$vm" -- sudo k3s ctr images import "/tmp/$svc.tar"
+    mp exec "$vm" -- rm -f "/tmp/$svc.tar"
+  done
 done
 
-echo "==> Images in the cluster:"
-mp exec "$VM_NAME" -- sudo k3s crictl images | grep case-poc
+echo "==> Images per node:"
+for vm in $VMS; do
+  echo "--- $vm"
+  mp exec "$vm" -- sudo k3s crictl images | grep case-poc
+done

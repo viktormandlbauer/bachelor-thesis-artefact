@@ -1,0 +1,63 @@
+# Host-network bridges: cluster -> compose infra on the control-plane VM.
+#
+# Why this exists: the infra services (SigNoz collector, PostgreSQL, Keycloak,
+# GitLab, Harbor) run in docker compose on the control-plane VM and publish
+# their ports via Docker's published-port DNAT. On a node that ALSO runs k3s,
+# that DNAT path is not reachable from cluster pods (or even from the host
+# itself via the node IP): the DNAT'd packet is forwarded to the docker bridge
+# and dropped by the k3s (kube-router) FORWARD handling. Only a **host-network**
+# listener on the control-plane node is reachable from pods on every node —
+# exactly the path the kube-apiserver (:6443) uses.
+#
+# So each bridge runs on the host network and relays a host-INPUT port into
+# the compose service's loopback published port (which works via docker-proxy).
+# The cluster reaches them through selector-less Services whose EndpointSlices
+# target <control-plane node IP>:<bridge port> (created by
+# scripts/argocd-install.sh), or — for Harbor — through the containerd
+# registry mirror in /etc/rancher/k3s/registries.yaml (deploy/vm/ansible).
+#
+#   14317 -> 127.0.0.1:4317   SigNoz OTLP collector (gRPC)
+#   15432 -> 127.0.0.1:5432   PostgreSQL           (app persistence)
+#   18180 -> 127.0.0.1:8180   Keycloak             (OIDC frontend+backchannel)
+#   18929 -> 127.0.0.1:8929   GitLab               (Argo CD GitOps source)
+#   18082 -> 127.0.0.1:8082   Harbor               (containerd image pulls)
+#
+# Started on the control-plane VM by deploy/vm/ansible/site.yml, after the
+# infra stacks. socat is a transparent L4 relay (TLS/HTTP2/gRPC negotiate end
+# to end); fork = one child per connection, reuseaddr = clean restarts.
+name: cp-bridges
+
+x-bridge: &bridge
+  image: alpine/socat:1.8.0.1
+  network_mode: host
+  restart: unless-stopped
+  logging:
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  otlp-bridge:
+    <<: *bridge
+    container_name: bridge-otlp
+    command: ["TCP-LISTEN:14317,fork,reuseaddr", "TCP:127.0.0.1:4317"]
+
+  postgres-bridge:
+    <<: *bridge
+    container_name: bridge-postgres
+    command: ["TCP-LISTEN:15432,fork,reuseaddr", "TCP:127.0.0.1:5432"]
+
+  keycloak-bridge:
+    <<: *bridge
+    container_name: bridge-keycloak
+    command: ["TCP-LISTEN:18180,fork,reuseaddr", "TCP:127.0.0.1:8180"]
+
+  gitlab-bridge:
+    <<: *bridge
+    container_name: bridge-gitlab
+    command: ["TCP-LISTEN:18929,fork,reuseaddr", "TCP:127.0.0.1:8929"]
+
+  harbor-bridge:
+    <<: *bridge
+    container_name: bridge-harbor
+    command: ["TCP-LISTEN:18082,fork,reuseaddr", "TCP:127.0.0.1:8082"]

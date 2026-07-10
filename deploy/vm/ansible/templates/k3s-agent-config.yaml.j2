@@ -1,0 +1,24 @@
+# /etc/rancher/k3s/config.yaml (agent / worker nodes)
+# Managed by deploy/vm/ansible/site.yml — do not edit on the node.
+#
+# CIS hardening mirrors the server's kubelet settings in
+# deploy/cluster/k3s/config.yaml; protect-kernel-defaults requires the
+# sysctls from 90-kubelet-sysctl.conf (applied by the playbook first).
+
+# Join parameters (file is 0600 root-only; the token stays off the CLI).
+server: {{ k3s_server_url }}
+token: {{ (node_token.content | b64decode) | trim }}
+
+protect-kernel-defaults: true
+
+# Scheduling hint consumed by the app chart: the stateless services carry a
+# preferred node affinity for case-poc/role=worker, while the stateful infra
+# is pinned to the control-plane node (values.yaml `scheduling`).
+node-label:
+  - case-poc/role=worker
+
+kubelet-arg:
+  # Idle streaming connections (exec/attach/logs) are closed after 5m (CIS 4.2.5 area).
+  - streaming-connection-idle-timeout=5m
+  # Explicitly pin the iptables util chains behaviour (CIS 4.2.6 expects the flag).
+  - make-iptables-util-chains=true

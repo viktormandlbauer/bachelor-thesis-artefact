@@ -1,3 +1,4 @@
+{{- if .Values.keycloak.enabled }}
 # Keycloak in dev mode with a declarative realm import — POC scope: the
 # embedded H2 store is ephemeral, but the realm (client management-api, role
 # case-manager, demo users) is re-imported from the ConfigMap on every start,
@@ -24,6 +25,7 @@ spec:
         checksum/realm: {{ .Files.Get "files/case-poc-realm.json" | sha256sum }}
     spec:
       automountServiceAccountToken: false
+      {{- include "case-poc.infraNodeSelector" . | nindent 6 }}
       securityContext:
         {{- include "case-poc.podSecurityContext" (dict "uid" .Values.keycloak.runAsUser) | nindent 8 }}
         runAsGroup: {{ .Values.keycloak.runAsGroup }}
@@ -82,3 +84,4 @@ spec:
         - name: realm-import
           configMap:
             name: {{ include "case-poc.fullname" . }}-keycloak-realm
+{{- end }}

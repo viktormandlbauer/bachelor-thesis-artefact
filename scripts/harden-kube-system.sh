@@ -16,10 +16,10 @@
 # Kubernetes API mount an explicitly projected, expiring token at the default
 # path. Patches live in the cluster state; k3s's addon controller only
 # re-applies its manifests when they change (i.e. on k3s upgrades), at which
-# point this script must be re-run. Applied by deploy/vm/ansible/k3s-playbook.yml;
+# point this script must be re-run. Applied by deploy/vm/ansible/site.yml;
 # to re-run by hand:
 #
-#   multipass exec case-poc -- sudo bash /repo/scripts/harden-kube-system.sh
+#   multipass exec case-poc-cp -- sudo bash /repo/scripts/harden-kube-system.sh
 set -euo pipefail
 
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"

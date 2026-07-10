@@ -1,31 +1,46 @@
 #!/usr/bin/env bash
 #
-# Creates (or reuses) the multipass VM for the k8s POC, mounts the repo at
-# /repo inside the VM, and provisions the CIS-hardened k3s server with
-# Ansible run FROM THE HOST (the controller) over SSH:
+# Creates (or reuses) the multipass VMs for the k8s POC and provisions them
+# with Ansible run FROM THE CONTROL-PLANE VM (the controller lives in the
+# cluster, not on the host — the host only needs multipass):
 #
-#   host (controller: multipass, ansible, ssh keypair)
-#     └── ssh -> VM "case-poc"  (provisioned by deploy/vm/ansible/k3s-playbook.yml)
+#   host (multipass only)
+#     ├── VM "case-poc-cp"        control plane (dedicated)
+#     │     ├── Ansible controller  (repo mounted at /repo, this script installs
+#     │     │                        ansible + a keypair and runs site.yml from here)
+#     │     ├── k3s server          (CIS-hardened; infra workloads + PVs pinned here)
+#     │     └── docker compose      (SigNoz monitoring + Keycloak + PostgreSQL)
+#     └── VM "case-poc-w1..N"     k3s agents (app services prefer these nodes)
 #
 #   bash scripts/vm-up.sh
 #
+# Knobs (env): WORKERS=1 (0 = single-node, e.g. for the measure/ parity runs),
+# COMPOSE_INFRA=1 (0 = skip the compose-side infra on the control plane),
+# CP_CPUS/CP_MEMORY/CP_DISK, WORKER_CPUS/WORKER_MEMORY/WORKER_DISK.
+#
 # Idempotent: re-running re-applies the playbook (refreshes config, restarts
-# k3s if needed) and re-exports the kubeconfig. On Windows, mounts must be
-# enabled once beforehand: multipass set local.privileged-mounts=true
+# k3s if needed, re-points agents at the current server IP) and re-exports the
+# kubeconfig. On Windows, mounts must be enabled once beforehand:
+# multipass set local.privileged-mounts=true
 set -euo pipefail
 
-VM_NAME="${VM_NAME:-case-poc}"
-VM_CPUS="${VM_CPUS:-4}"
-VM_MEMORY="${VM_MEMORY:-8G}"
-VM_DISK="${VM_DISK:-40G}"
+CP_NAME="${CP_NAME:-case-poc-cp}"
+WORKER_PREFIX="${WORKER_PREFIX:-case-poc-w}"
+WORKERS="${WORKERS:-1}"
+COMPOSE_INFRA="${COMPOSE_INFRA:-1}"
+
+CP_CPUS="${CP_CPUS:-4}"
+CP_MEMORY="${CP_MEMORY:-8G}"
+CP_DISK="${CP_DISK:-40G}"
+WORKER_CPUS="${WORKER_CPUS:-2}"
+WORKER_MEMORY="${WORKER_MEMORY:-3G}"
+WORKER_DISK="${WORKER_DISK:-20G}"
 UBUNTU_IMAGE="${UBUNTU_IMAGE:-24.04}"
-SSH_KEY="${SSH_KEY:-$HOME/.ssh/multipass-$VM_NAME}"
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANSIBLE_DIR="$REPO_DIR/deploy/vm/ansible"
 
 command -v multipass >/dev/null || { echo "multipass not found (https://canonical.com/multipass)"; exit 1; }
-command -v ansible-playbook >/dev/null || { echo "ansible-playbook not found (macOS: brew install ansible)"; exit 1; }
 
 # Git Bash rewrites arguments that look like POSIX paths before they reach the
 # native multipass.exe; VM-side paths (/repo/...) must stay untouched, while
@@ -33,52 +48,84 @@ command -v ansible-playbook >/dev/null || { echo "ansible-playbook not found (ma
 mp() { MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' multipass "$@"; }
 host_path() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
 
-if [ ! -f "$SSH_KEY" ]; then
-  echo "==> Generating controller SSH keypair $SSH_KEY"
-  ssh-keygen -t ed25519 -N '' -C "ansible-controller-$VM_NAME" -f "$SSH_KEY" >/dev/null
-fi
+ensure_vm() { # name cpus memory disk
+  local name="$1" cpus="$2" memory="$3" disk="$4"
+  if ! mp info "$name" >/dev/null 2>&1; then
+    echo "==> Launching multipass VM '$name' (Ubuntu $UBUNTU_IMAGE, $cpus CPUs, $memory RAM, $disk disk)"
+    mp launch "$UBUNTU_IMAGE" --name "$name" \
+      --cpus "$cpus" --memory "$memory" --disk "$disk" \
+      --timeout 900
+  else
+    echo "==> VM '$name' already exists; reusing"
+    mp start "$name"
+  fi
+  if ! mp info "$name" --format json | grep -q '"/repo"'; then
+    echo "==> Mounting repo at $name:/repo"
+    mp mount "$(host_path "$REPO_DIR")" "$name:/repo"
+  fi
+}
 
-if ! mp info "$VM_NAME" >/dev/null 2>&1; then
-  echo "==> Launching multipass VM '$VM_NAME' (Ubuntu $UBUNTU_IMAGE, $VM_CPUS CPUs, $VM_MEMORY RAM, $VM_DISK disk)"
-  mp launch "$UBUNTU_IMAGE" --name "$VM_NAME" \
-    --cpus "$VM_CPUS" --memory "$VM_MEMORY" --disk "$VM_DISK" \
-    --timeout 900
-else
-  echo "==> VM '$VM_NAME' already exists; reusing"
-  mp start "$VM_NAME"
-fi
+vm_ip() { mp exec "$1" -- hostname -I | tr -d '\r' | awk '{print $1}'; }
 
-# Key injection via exec instead of cloud-init: it also covers VMs that
-# already exist (cloud-init only runs on first boot).
-echo "==> Authorizing the controller key for user ubuntu"
-mp exec "$VM_NAME" -- bash -c "grep -qF '$(cat "$SSH_KEY.pub")' ~/.ssh/authorized_keys 2>/dev/null \
-  || echo '$(cat "$SSH_KEY.pub")' >> ~/.ssh/authorized_keys"
+ensure_vm "$CP_NAME" "$CP_CPUS" "$CP_MEMORY" "$CP_DISK"
 
-if ! mp info "$VM_NAME" --format json | grep -q '"/repo"'; then
-  echo "==> Mounting repo at $VM_NAME:/repo"
-  mp mount "$(host_path "$REPO_DIR")" "$VM_NAME:/repo"
-fi
+WORKER_NAMES=()
+for i in $(seq 1 "$WORKERS"); do
+  name="$WORKER_PREFIX$i"
+  ensure_vm "$name" "$WORKER_CPUS" "$WORKER_MEMORY" "$WORKER_DISK"
+  WORKER_NAMES+=("$name")
+done
 
-VM_IP="$(mp exec "$VM_NAME" -- hostname -I | tr -d '\r' | awk '{print $1}')"
+# The control-plane VM is the Ansible controller: it needs ansible itself and
+# an SSH keypair the workers trust. Everything else is managed by the playbook.
+echo "==> Ensuring ansible + controller keypair on $CP_NAME"
+mp exec "$CP_NAME" -- bash -c \
+  'command -v ansible-playbook >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq ansible >/dev/null; }'
+mp exec "$CP_NAME" -- bash -c \
+  '[ -f ~/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -N "" -C "ansible-controller-'"$CP_NAME"'" -f ~/.ssh/id_ed25519 >/dev/null'
+CP_PUBKEY="$(mp exec "$CP_NAME" -- cat /home/ubuntu/.ssh/id_ed25519.pub | tr -d '\r')"
 
-echo "==> Writing inventory ($VM_NAME @ $VM_IP)"
-cat > "$ANSIBLE_DIR/inventory.ini" <<EOF
-# Generated by scripts/vm-up.sh - do not edit (gitignored)
-[case_poc]
-$VM_IP ansible_user=ubuntu ansible_ssh_private_key_file=$SSH_KEY
-EOF
+for name in "${WORKER_NAMES[@]:+${WORKER_NAMES[@]}}"; do
+  echo "==> Authorizing the controller key on $name"
+  mp exec "$name" -- bash -c "grep -qF '$CP_PUBKEY' ~/.ssh/authorized_keys 2>/dev/null \
+    || echo '$CP_PUBKEY' >> ~/.ssh/authorized_keys"
+done
 
-echo "==> Provisioning hardened k3s (ansible-playbook from the host)"
-ANSIBLE_CONFIG="$ANSIBLE_DIR/ansible.cfg" ansible-playbook \
-  -i "$ANSIBLE_DIR/inventory.ini" "$ANSIBLE_DIR/k3s-playbook.yml"
+echo "==> Writing inventory (controller = $CP_NAME, ${#WORKER_NAMES[@]} worker(s))"
+{
+  echo "# Generated by scripts/vm-up.sh - do not edit (gitignored)"
+  echo "[control_plane]"
+  echo "$CP_NAME ansible_connection=local"
+  echo
+  echo "[workers]"
+  for name in "${WORKER_NAMES[@]:+${WORKER_NAMES[@]}}"; do
+    echo "$(vm_ip "$name") ansible_user=ubuntu  # $name"
+  done
+} > "$ANSIBLE_DIR/inventory.ini"
+
+[ "$COMPOSE_INFRA" = "1" ] && compose_infra=true || compose_infra=false
+
+echo "==> Provisioning cluster (ansible-playbook from inside $CP_NAME)"
+mp exec "$CP_NAME" -- env ANSIBLE_CONFIG=/repo/deploy/vm/ansible/ansible.cfg \
+  ansible-playbook -i /repo/deploy/vm/ansible/inventory.ini \
+  -e "compose_infra=$compose_infra" /repo/deploy/vm/ansible/site.yml
+
+CP_IP="$(vm_ip "$CP_NAME")"
 
 echo "==> Exporting kubeconfig for host kubectl -> .vm-kubeconfig.yaml (gitignored)"
-mp exec "$VM_NAME" -- sudo cat /etc/rancher/k3s/k3s.yaml \
-  | sed "s/127\\.0\\.0\\.1/$VM_IP/" > "$REPO_DIR/.vm-kubeconfig.yaml"
+mp exec "$CP_NAME" -- sudo cat /etc/rancher/k3s/k3s.yaml \
+  | sed "s/127\\.0\\.0\\.1/$CP_IP/" > "$REPO_DIR/.vm-kubeconfig.yaml"
 chmod 600 "$REPO_DIR/.vm-kubeconfig.yaml"
 
 echo
 echo "==> Done."
-echo "VM IP:    $VM_IP  (Traefik ingress on port 80)"
-echo "kubectl:  kubectl --kubeconfig .vm-kubeconfig.yaml get pods -A"
-echo "Shell:    multipass shell $VM_NAME"
+echo "Control plane: $CP_NAME @ $CP_IP  (Traefik ingress on port 80)"
+for name in "${WORKER_NAMES[@]:+${WORKER_NAMES[@]}}"; do
+  echo "Worker:        $name @ $(vm_ip "$name")"
+done
+if [ "$compose_infra" = "true" ]; then
+  echo "SigNoz UI:     http://$CP_IP:3301   (compose, on the control-plane VM)"
+  echo "Keycloak:      http://$CP_IP:8180   (compose, on the control-plane VM)"
+fi
+echo "kubectl:       kubectl --kubeconfig .vm-kubeconfig.yaml get pods -A"
+echo "Shell:         multipass shell $CP_NAME"

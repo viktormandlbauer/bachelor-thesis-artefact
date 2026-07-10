@@ -18,7 +18,7 @@ The harness lives in [`measure/`](../measure/README.md); results land in
 
 ## 1. Test environment
 
-| Parameter | `case-engines` (compose, podman) | `case-poc` (k3s) |
+| Parameter | `case-engines` (compose, podman) | `case-poc-cp` (k3s, single-node parity mode: `WORKERS=0 COMPOSE_INFRA=0`) |
 |---|---|---|
 | VM | Multipass, Ubuntu 24.04, **4 vCPU / 8 GiB / 40 GiB** | identical |
 | Host | same macOS host (10 cores / 16 GiB), one VM running at a time | identical |

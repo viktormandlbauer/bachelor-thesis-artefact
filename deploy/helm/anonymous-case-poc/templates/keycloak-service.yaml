@@ -7,9 +7,21 @@ metadata:
     app.kubernetes.io/name: keycloak
 spec:
   type: ClusterIP
+  {{- if .Values.keycloak.enabled }}
   selector:
     {{- include "case-poc.selectorLabels" (dict "root" . "component" "keycloak") | nindent 4 }}
   ports:
     - name: http
       port: 8080
       targetPort: http
+  {{- else }}
+  # Selector-less: fronts the compose Keycloak on the control-plane VM.
+  # The EndpointSlice (node IP : bridge port) is runtime state, created at
+  # bootstrap by scripts/argocd-install.sh — like signoz-collector. Both the
+  # ingress route (keycloakHost) and the management-service backchannel keep
+  # using this Service name unchanged.
+  ports:
+    - name: http
+      port: 8080
+      targetPort: {{ .Values.keycloak.externalPort }}
+  {{- end }}

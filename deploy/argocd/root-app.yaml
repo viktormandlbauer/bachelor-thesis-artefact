@@ -3,6 +3,11 @@
 # Application manifest there and pushing is all it takes to deploy something
 # new - cluster state follows git.
 #
+# The source is the INTERNAL GitLab on the control-plane VM (pushed to by
+# scripts/gitops-push.sh), reached through the selector-less `gitlab` Service
+# in the argocd namespace — the cluster deploys from infrastructure the
+# artefact controls, not from GitHub.
+#
 # targetRevision tracks the phase2 branch; switch to HEAD once merged to main.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -12,7 +17,7 @@ metadata:
 spec:
   project: case-poc
   source:
-    repoURL: https://github.com/viktormandlbauer/bachelor-thesis-artefact.git
+    repoURL: http://gitlab.argocd.svc.cluster.local/root/bachelor-thesis-artefact.git
     targetRevision: phase2
     path: deploy/argocd/apps
   destination:

@@ -8,12 +8,20 @@
 # PostgreSQL volume is initialized with the first-run passwords and the
 # running pods hold the current broker credentials.
 #
-# Run inside the multipass VM as root (called by scripts/argocd-install.sh):
+# Run inside the control-plane VM as root (called by scripts/argocd-install.sh):
 #
-#   multipass exec case-poc -- sudo bash /repo/scripts/secrets-bootstrap.sh [namespace]
+#   multipass exec case-poc-cp -- sudo bash /repo/scripts/secrets-bootstrap.sh [namespace]
+#
+# EXTERNAL_INFRA=1: the GitOps variant uses the compose PostgreSQL on the
+# control-plane VM (postgres.enabled=false in the Application) — its
+# per-service passwords are the fixed dev fixtures of
+# infra/postgres/init/01-schemas-users.sql, so the db Secret must carry those
+# instead of generated ones. Dev fixtures of the local PoC infra, not
+# production secrets (same disposition as the compose file itself).
 set -euo pipefail
 
 NS="${1:-case-poc}"
+EXTERNAL_INFRA="${EXTERNAL_INFRA:-0}"
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 
 # hex output: safe to single-quote in SQL/property contexts.
@@ -34,10 +42,17 @@ ensure_secret case-poc-artemis-auth \
   "ARTEMIS_USER=artemis" \
   "ARTEMIS_PASSWORD=$(rand)"
 
-ensure_secret case-poc-db-auth \
-  "POSTGRES_PASSWORD=$(rand)" \
-  "SUBMISSION_DB_PASSWORD=$(rand)" \
-  "MANAGEMENT_DB_PASSWORD=$(rand)"
+if [ "$EXTERNAL_INFRA" = "1" ]; then
+  ensure_secret case-poc-db-auth \
+    "POSTGRES_PASSWORD=postgres" \
+    "SUBMISSION_DB_PASSWORD=submission_service" \
+    "MANAGEMENT_DB_PASSWORD=management_service"
+else
+  ensure_secret case-poc-db-auth \
+    "POSTGRES_PASSWORD=$(rand)" \
+    "SUBMISSION_DB_PASSWORD=$(rand)" \
+    "MANAGEMENT_DB_PASSWORD=$(rand)"
+fi
 
 ensure_secret case-poc-keycloak-admin \
   "KC_BOOTSTRAP_ADMIN_USERNAME=admin" \

@@ -7,6 +7,12 @@
 # scripts/secrets-bootstrap.sh (called from scripts/argocd-install.sh).
 
 images:
+  # Optional registry prefix. Empty = local image names (imported into
+  # containerd by scripts/images-import.sh). The GitOps Application sets
+  # harbor.case-poc.local — the internal Harbor on the control-plane VM,
+  # resolved by the containerd mirror in /etc/rancher/k3s/registries.yaml
+  # (deploy/vm/ansible), pushed by scripts/images-publish.sh.
+  registry: ""
   submission:
     repository: case-poc/submission-service
     tag: "2.0.0"
@@ -24,6 +30,23 @@ secrets:
   db: case-poc-db-auth
   # keys: KC_BOOTSTRAP_ADMIN_USERNAME, KC_BOOTSTRAP_ADMIN_PASSWORD
   keycloakAdmin: case-poc-keycloak-admin
+
+# Multi-node scheduling (dedicated control-plane VM + workers, see
+# scripts/vm-up.sh): the stateful infra components — Artemis, PostgreSQL,
+# Keycloak — are pinned to the control-plane node, so their local-path PVs
+# (broker journal, database) live on that VM. The stateless app services
+# carry a soft affinity for the worker nodes (label case-poc/role=worker,
+# stamped by the k3s agent config) and fall back to the control plane on a
+# single-node cluster (WORKERS=0).
+scheduling:
+  infraNodeSelector:
+    node-role.kubernetes.io/control-plane: "true"
+  servicesPreferWorkers: true
+  # The GitOps variant runs postgres/keycloak OUTSIDE the cluster (compose on
+  # the control-plane VM); Artemis is then part of the measured application
+  # stack and joins the services on the worker nodes instead of being pinned
+  # to the control plane with the other stateful components.
+  artemisWithServices: false
 
 artemis:
   image: apache/activemq-artemis:2.44.0
@@ -45,6 +68,16 @@ artemis:
       memory: 1Gi
 
 postgres:
+  # false = the compose PostgreSQL on the control-plane VM is used instead of
+  # an in-cluster instance: the chart then renders the -postgres Service
+  # selector-less, and scripts/argocd-install.sh supplies the EndpointSlice
+  # targeting <control-plane node IP>:15432 (host-network bridge, see
+  # infra/cp-bridges.compose.yaml) — the same pattern as signoz-collector.
+  # Default stays in-cluster for the plain-helm variants (measure/,
+  # validation harness), which must be self-contained.
+  enabled: true
+  # Bridge port on the control-plane VM (enabled=false only).
+  externalPort: 15432
   image: postgres:17-alpine
   # uid/gid of the 'postgres' user in the alpine image; the official image
   # supports running as this non-root uid when the data dir is group-owned
@@ -63,6 +96,18 @@ postgres:
       memory: 512Mi
 
 keycloak:
+  # false = the compose Keycloak on the control-plane VM is used instead of an
+  # in-cluster instance (selector-less Service -> bridge :18180, like
+  # postgres.enabled above). The compose Keycloak stamps its own fixed issuer
+  # (KC_HOSTNAME, infra/docker-compose.yml) into every token, so set
+  # tokenIssuer to match it; discovery/JWKS still work service-locally thanks
+  # to KC_HOSTNAME_BACKCHANNEL_DYNAMIC.
+  enabled: true
+  # Bridge port on the control-plane VM (enabled=false only).
+  externalPort: 18180
+  # Issuer management-service pins (QUARKUS_OIDC_TOKEN_ISSUER). Empty =
+  # derived from ingress.keycloakHost (the in-cluster Keycloak's KC_HOSTNAME).
+  tokenIssuer: ""
   image: quay.io/keycloak/keycloak:26.3
   # uid of the 'keycloak' user in the image. gid stays 0 (root group): the
   # image's file permissions follow the OpenShift convention (group-writable
@@ -87,14 +132,17 @@ services:
     limits:
       memory: 512Mi
 
-# Tracing export. The POC cluster runs no SigNoz/collector, so the OTel SDK
-# is disabled by default; point endpoint at a reachable OTLP gRPC collector
-# and set enabled=true to restore Phase-1 tracing. Note: with the egress
-# NetworkPolicies enabled, an in-cluster collector also needs a matching
-# egress/ingress rule.
+# Tracing export. SigNoz runs on the control-plane VM (compose); the
+# selector-less Service `signoz-collector` that fronts it (node IP endpoint)
+# is created at bootstrap by scripts/argocd-install.sh — runtime state like
+# the Secrets, never in git. The GitOps Application
+# (deploy/argocd/apps/anonymous-case-poc.yaml) switches enabled=true; the
+# chart default stays off so plain-helm installs (measure/, validation
+# harness) don't export into a namespace without that Service. Enabling also
+# renders the matching OTLP egress NetworkPolicy.
 otel:
   enabled: false
-  endpoint: http://signoz-otel-collector:4317
+  endpoint: http://signoz-collector:4317
   resourceAttributes: service.namespace=anonymous-case-poc,deployment.environment=k3s-poc
 
 ingress:

@@ -1,8 +1,10 @@
-# /etc/rancher/k3s/config.yaml
+# /etc/rancher/k3s/config.yaml (control-plane / server node)
 #
-# CIS-hardened single-node k3s server for the anonymous-case POC.
-# Aligned with the Rancher k3s CIS hardening guide and the kube-bench
-# k3s-cis-1.9 profile (see scripts/kube-bench-run.sh).
+# CIS-hardened k3s server for the anonymous-case POC: the dedicated
+# control-plane node of the cluster (agents get their own config from
+# deploy/vm/ansible/templates/k3s-agent-config.yaml.j2). Aligned with the
+# Rancher k3s CIS hardening guide and the kube-bench k3s-cis-1.9 profile
+# (see scripts/kube-bench-run.sh).
 #
 # k3s already satisfies most scored CIS checks by default (anonymous-auth=false,
 # Node+RBAC authorization, NodeRestriction, profiling=false, secure TLS ciphers,
@@ -17,7 +19,7 @@ secrets-encryption: true
 
 # Kubelet refuses to start unless the kernel flags match its expectations
 # (CIS 4.2.5). Requires the sysctls from deploy/cluster/k3s/90-kubelet-sysctl.conf
-# to be applied first (done by deploy/vm/ansible/k3s-playbook.yml).
+# to be applied first (done by deploy/vm/ansible/site.yml).
 protect-kernel-defaults: true
 
 kube-apiserver-arg:

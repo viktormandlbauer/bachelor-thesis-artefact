@@ -225,7 +225,7 @@ flowchart TB
 | Identity least-privilege | namespace-scoped Argo CD, non-wildcard Roles enumerating exactly the chart's kinds; projected expiring tokens for the few pods that need the API | `deploy/argocd/install/case-poc/argocd-rbac.yaml`, `scripts/harden-kube-system.sh` |
 | Network | default-deny ingress; HTTP only from kube-system (Traefik); AMQP only from the release's pods | `templates/networkpolicies.yaml` |
 | GitOps | app-of-apps root, AppProject guardrails (one repo, two namespaces, `clusterResourceWhitelist: []`), two-phase bootstrap, pull-based sync | `deploy/argocd/` |
-| Reproducibility | VM + k3s provisioned by an idempotent Ansible playbook from the host; every component version pinned | `deploy/vm/ansible/k3s-playbook.yml`, `docs/k8s-poc.md` |
+| Reproducibility | VMs + k3s provisioned by an idempotent Ansible playbook run from the control-plane VM; every component version pinned | `deploy/vm/ansible/site.yml`, `docs/k8s-poc.md` |
 | App operability | startup/readiness/liveness probes (readiness includes the broker link), resource requests/limits, PVC for the broker journal | `templates/*-deployment.yaml` |
 
 **Verdict:** for a single-node POC this is an unusually complete security/GitOps

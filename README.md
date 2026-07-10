@@ -5,9 +5,13 @@ patterns: two Quarkus services — `submission-service` for anonymous reporters,
 `management-service` for staff — that integrate **only** through an ActiveMQ Artemis
 broker, made reliable with a transactional outbox/persistent inbox over PostgreSQL,
 authenticated with Keycloak OIDC, traced end-to-end with OpenTelemetry/SigNoz,
-developed compose-first, and promoted onto a CIS-hardened single-node k3s cluster
-managed by Argo CD GitOps. A measurement harness compares the k3s platform against
-docker compose and podman `kube play` running the identical workload.
+developed compose-first, and promoted onto a CIS-hardened k3s cluster (dedicated
+control-plane VM — which doubles as Ansible controller and compose-infra host
+running SigNoz, Keycloak, PostgreSQL, an internal GitLab as the GitOps source
+and an internal Harbor registry — plus workers carrying only the application
+stack) managed by Argo CD GitOps. A measurement harness compares the k3s
+platform against docker compose and podman `kube play` running the identical
+workload.
 
 ## The four tracks
 

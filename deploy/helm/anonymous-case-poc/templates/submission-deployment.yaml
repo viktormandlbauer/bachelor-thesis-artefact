@@ -17,11 +17,12 @@ spec:
         {{- include "case-poc.selectorLabels" (dict "root" . "component" "submission-service") | nindent 8 }}
     spec:
       automountServiceAccountToken: false
+      {{- include "case-poc.servicesNodeAffinity" . | nindent 6 }}
       securityContext:
         {{- include "case-poc.podSecurityContext" (dict "uid" .Values.services.runAsUser) | nindent 8 }}
       containers:
         - name: submission-service
-          image: "{{ .Values.images.submission.repository }}:{{ .Values.images.submission.tag }}"
+          image: {{ include "case-poc.image" (dict "root" . "img" .Values.images.submission) | quote }}
           imagePullPolicy: {{ .Values.images.pullPolicy }}
           securityContext:
             {{- include "case-poc.containerSecurityContext" . | nindent 12 }}

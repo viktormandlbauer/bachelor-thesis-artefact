@@ -1,4 +1,4 @@
-{{- if .Values.postgres.persistence.enabled }}
+{{- if and .Values.postgres.enabled .Values.postgres.persistence.enabled }}
 # Database files of the single PostgreSQL instance (schemas submission +
 # management). Case data survives pod restarts — the Phase-2 statelessness
 # property depends on this volume, not on the service pods.

@@ -7,9 +7,19 @@ metadata:
     app.kubernetes.io/name: postgres
 spec:
   type: ClusterIP
+  {{- if .Values.postgres.enabled }}
   selector:
     {{- include "case-poc.selectorLabels" (dict "root" . "component" "postgres") | nindent 4 }}
   ports:
     - name: postgres
       port: 5432
       targetPort: postgres
+  {{- else }}
+  # Selector-less: fronts the compose PostgreSQL on the control-plane VM.
+  # The EndpointSlice (node IP : bridge port) is runtime state, created at
+  # bootstrap by scripts/argocd-install.sh — like signoz-collector.
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: {{ .Values.postgres.externalPort }}
+  {{- end }}

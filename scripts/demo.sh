@@ -75,9 +75,11 @@ echo "$reply_response" | jq .
 EVENT_2=$(jq -r '.eventId' <<<"$reply_response")
 
 bold "7. Reply becomes visible on the submission side (via Artemis)"
+# The reply author is the authenticated Keycloak principal ("staff"), so match
+# the concrete event rather than a hardcoded author name.
 wait_for "management reply visible to the reporter" \
   "curl -sf '$SUBMISSION_URL/api/cases/$CASE_ID' -H 'X-Case-Token: $TOKEN'" \
-  '[.messages[] | select(.author == "management")] | length == 1' | jq .
+  "[.messages[] | select(.eventId == \"$EVENT_2\")] | length == 1" | jq .
 
 bold "8. Reporter sends a follow-up"
 followup_response=$(curl -sf -X POST "$SUBMISSION_URL/api/cases/$CASE_ID/messages" \

@@ -5,10 +5,10 @@
 # against the running POC cluster and writes a per-REQ evidence report to
 # docs/reports/requirements-validation-<date>.md.
 #
-# Run inside the multipass VM as root, with the case-poc app deployed and
+# Run inside the control-plane VM as root, with the case-poc app deployed and
 # healthy (the repo is mounted at /repo by scripts/vm-up.sh):
 #
-#   multipass exec case-poc -- sudo bash /repo/scripts/validate-requirements.sh
+#   multipass exec case-poc-cp -- sudo bash /repo/scripts/validate-requirements.sh
 #
 # Verdicts:
 #   PASS      acceptance criterion met

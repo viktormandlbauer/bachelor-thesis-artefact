@@ -1,0 +1,10 @@
+# Containerd registry mirror (server + agents, /etc/rancher/k3s/registries.yaml):
+# images named harbor.case-poc.local/... are pulled from the Harbor instance on
+# the control-plane VM via its host-network bridge :18082
+# (infra/cp-bridges.compose.yaml). Harbor's external_url points at the same
+# bridge endpoint, so the token-service realm in the auth handshake stays
+# reachable from every node. Plain http: the bridge port is VM-internal.
+mirrors:
+  "harbor.case-poc.local":
+    endpoint:
+      - "http://{{ harbor_mirror_ip }}:18082"

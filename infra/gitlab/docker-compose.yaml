@@ -1,0 +1,53 @@
+# Internal GitLab CE on the control-plane VM: the GitOps source for Argo CD
+# (deploy/argocd/*), so the cluster syncs from infrastructure the artefact
+# controls instead of GitHub. Reached by the Argo CD repo-server through the
+# selector-less `gitlab` Service in the argocd namespace -> host-network
+# bridge :18929 (infra/cp-bridges.compose.yaml).
+#
+# Started by deploy/vm/ansible/site.yml with the VM-local env file
+# /opt/case-poc/infra.env (GITLAB_ROOT_PASSWORD — generated once at provision
+# time, never in git; REQ-G-005):
+#
+#   docker compose --env-file /opt/case-poc/infra.env \
+#     -f /repo/infra/gitlab/docker-compose.yaml up -d
+#
+# Footprint is tuned for the shared 10G infra VM: single puma process, low
+# sidekiq concurrency, bundled monitoring off (SigNoz is the observability
+# stack of this artefact), no KAS / container registry (Harbor serves images).
+# First boot takes several minutes (omnibus reconfigure); the healthcheck
+# reflects readiness. initial_root_password applies on first boot only.
+name: case-poc-gitlab
+
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:18.2.1-ce.0
+    container_name: poc-gitlab
+    hostname: gitlab.case-poc.local
+    shm_size: 256m
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab.case-poc.local:8929'
+        gitlab_rails['initial_root_password'] = '${GITLAB_ROOT_PASSWORD}'
+        puma['worker_processes'] = 0
+        sidekiq['concurrency'] = 5
+        prometheus_monitoring['enable'] = false
+        gitlab_kas['enable'] = false
+        gitlab_rails['registry_enabled'] = false
+    ports:
+      - "8929:8929"   # nginx (external_url port): web UI + git-over-http
+    volumes:
+      - gitlab-config:/etc/gitlab
+      - gitlab-logs:/var/log/gitlab
+      - gitlab-data:/var/opt/gitlab
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/opt/gitlab/bin/gitlab-healthcheck", "--fail", "--max-time", "10"]
+      interval: 30s
+      timeout: 15s
+      retries: 20
+      start_period: 600s
+
+volumes:
+  gitlab-config:
+  gitlab-logs:
+  gitlab-data:

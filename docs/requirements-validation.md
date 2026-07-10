@@ -10,7 +10,7 @@ pass/fail, so the reports stay self-explanatory.
 Run (app deployed and healthy):
 
 ```bash
-multipass exec case-poc -- sudo bash /repo/scripts/validate-requirements.sh
+multipass exec case-poc-cp -- sudo bash /repo/scripts/validate-requirements.sh
 ```
 
 ## Verdict semantics
